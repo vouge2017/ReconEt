@@ -42,12 +42,14 @@ class FeeExtractor:
     """Extract fees from Ethiopian bank transaction descriptions"""
     
     CBE_FEE_PATTERNS = [
+        # Combined pattern first (most specific — catches FEE 25 TAX 15)
+        (r'(?:FEE|CHG|CHARGE)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:TAX|VAT)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
+         None, 0.95),
+        # Individual patterns (only match if combined didn't)
         (r'(?:FEE|CHARGE|COMM(?:ISSION)?)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
          FeeType.BANK_CHARGE, 0.9),
         (r'(?:TAX|VAT|GOV\s*TAX)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
          FeeType.GOV_TAX, 0.9),
-        (r'(?:FEE|CHG|CHARGE)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:TAX|VAT)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
-         None, 0.95),
     ]
     
     def extract_from_text(self, description: str, amount: float) -> FeeExtractionResult:
@@ -56,13 +58,20 @@ class FeeExtractor:
         
         description = description.upper().strip()
         fees_found = []
+        combined_matched = False
         
         for pattern, fee_type, confidence in self.CBE_FEE_PATTERNS:
+            # Skip individual patterns if combined already matched
+            if combined_matched and fee_type is not None:
+                continue
+            
             matches = re.finditer(pattern, description, re.IGNORECASE)
             for match in matches:
                 groups = match.groups()
                 
                 if fee_type is None and len(groups) == 2:
+                    # Combined pattern matched
+                    combined_matched = True
                     fee_amount = self._parse_amount(groups[0])
                     tax_amount = self._parse_amount(groups[1])
                     
@@ -137,3 +146,32 @@ class FeeExtractor:
             confidence=0.0,
             needs_review=False
         )
+
+
+def format_fee_summary(results: List[FeeExtractionResult]) -> dict:
+    """Format a list of fee extraction results into a summary dict"""
+    total_gross = sum(r.gross_amount for r in results)
+    total_bank_charges = sum(r.bank_charge for r in results)
+    total_gov_tax = sum(r.gov_tax for r in results)
+    total_fees = sum(r.total_fees for r in results)
+    needs_review = sum(1 for r in results if r.needs_review)
+
+    # Group by extraction method
+    by_method = {}
+    for r in results:
+        method = r.extraction_method
+        if method not in by_method:
+            by_method[method] = {"count": 0, "total_fees": 0.0}
+        by_method[method]["count"] += 1
+        by_method[method]["total_fees"] += r.total_fees
+
+    return {
+        "total_transactions": len(results),
+        "total_gross_amount": total_gross,
+        "total_bank_charges": total_bank_charges,
+        "total_gov_tax": total_gov_tax,
+        "total_fees": total_fees,
+        "fee_percentage": (total_fees / total_gross * 100) if total_gross > 0 else 0,
+        "needs_review": needs_review,
+        "by_extraction_method": by_method
+    }

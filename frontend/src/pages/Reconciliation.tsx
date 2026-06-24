@@ -10,11 +10,35 @@ interface FeeBreakdown {
   net_amount: number;
 }
 
+interface RichExplanation {
+  match_type: string;
+  confidence: number;
+  confidence_level: string;
+  summary_english: string;
+  summary_amharic: string;
+  components: Array<{
+    category: string;
+    english: string;
+    amharic: string;
+    ifrs_reference: string | null;
+    detail: string | null;
+  }>;
+  accounting_treatment: string;
+  accounting_treatment_am: string;
+  ifrs_standard: string | null;
+  compliance_note: string | null;
+  compliance_note_am: string | null;
+  audit_trail_note: string;
+  period_impact: string | null;
+  anomaly_flags: string[];
+}
+
 interface Match {
   match_id: string;
   match_type: string;
   confidence: number;
   explanation: string;
+  rich_explanation: RichExplanation;
   status: string;
   amount_strategy: string;
   bank_transaction: {
@@ -26,6 +50,7 @@ interface Match {
   };
   gl_entry_ids: string[];
   fee_breakdown: FeeBreakdown | null;
+  anomaly_flags: string[];
 }
 
 interface FeeSummary {
@@ -118,6 +143,7 @@ const FeeBreakdownCard: React.FC<{ fee: FeeBreakdown; confidence: number }> = ({
 // Match Card
 const MatchCard: React.FC<{ match: Match }> = ({ match }) => {
   const [expanded, setExpanded] = useState(false);
+  const rich = match.rich_explanation;
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow">
@@ -129,6 +155,11 @@ const MatchCard: React.FC<{ match: Match }> = ({ match }) => {
             <span className={`px-2 py-1 text-xs font-medium rounded-full ${getConfidenceColor(match.confidence)}`}>
               {match.confidence}% confidence
             </span>
+            {rich?.ifrs_standard && (
+              <span className="px-2 py-1 text-xs font-medium bg-indigo-100 text-indigo-800 rounded-full">
+                {rich.ifrs_standard}
+              </span>
+            )}
           </div>
           <button 
             onClick={() => setExpanded(!expanded)}
@@ -158,10 +189,40 @@ const MatchCard: React.FC<{ match: Match }> = ({ match }) => {
           </div>
         </div>
 
-        {/* Explanation */}
-        <div className="mt-3 p-2 bg-gray-50 rounded text-xs text-gray-600">
-          {match.explanation}
-        </div>
+        {/* Rich Explanation (from Explainability Engine) */}
+        {rich && (
+          <div className="mt-3">
+            {/* Summary */}
+            <div className="p-2 bg-blue-50 rounded text-sm text-blue-900">
+              {rich.summary_english}
+            </div>
+            
+            {/* Accounting Treatment */}
+            <div className="mt-2 p-2 bg-green-50 rounded text-xs text-green-800">
+              <span className="font-medium">Treatment:</span> {rich.accounting_treatment}
+            </div>
+            
+            {/* Period Impact */}
+            {rich.period_impact && (
+              <div className={`mt-2 p-2 rounded text-xs ${
+                rich.period_impact.includes('⚠️') ? 'bg-yellow-50 text-yellow-800' : 'bg-gray-50 text-gray-700'
+              }`}>
+                {rich.period_impact}
+              </div>
+            )}
+            
+            {/* Anomaly Flags */}
+            {rich.anomaly_flags && rich.anomaly_flags.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {rich.anomaly_flags.map((flag, idx) => (
+                  <div key={idx} className="p-2 bg-orange-50 rounded text-xs text-orange-800">
+                    ⚠️ {flag.split(': ')[1] || flag}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Fee Breakdown (expandable) */}
         {match.fee_breakdown && match.fee_breakdown.total_fees > 0 && (
@@ -169,9 +230,30 @@ const MatchCard: React.FC<{ match: Match }> = ({ match }) => {
         )}
 
         {/* Expanded Details */}
-        {expanded && (
+        {expanded && rich && (
           <div className="mt-3 pt-3 border-t border-gray-100">
-            <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
+            {/* Match Components */}
+            <div className="mb-3">
+              <h4 className="text-xs font-medium text-gray-500 uppercase mb-2">Match Components</h4>
+              <div className="space-y-1">
+                {rich.components.map((comp, idx) => (
+                  <div key={idx} className="text-xs text-gray-600">
+                    <span className="font-medium capitalize">{comp.category}:</span> {comp.english}
+                    {comp.ifrs_reference && (
+                      <span className="ml-2 text-indigo-600">({comp.ifrs_reference})</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {/* Audit Trail Note */}
+            <div className="text-xs text-gray-500 italic">
+              {rich.audit_trail_note}
+            </div>
+            
+            {/* Match Metadata */}
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-500">
               <div>Match Type: <span className="font-medium text-gray-700">{match.match_type}</span></div>
               <div>Strategy: <span className="font-medium text-gray-700">{match.amount_strategy}</span></div>
               <div>Bank Txn ID: <span className="font-mono">{match.bank_transaction.id}</span></div>

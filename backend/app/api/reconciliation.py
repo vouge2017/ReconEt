@@ -7,7 +7,7 @@ GET  /api/reconciliation/summary — Get fee summary report
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime
 import uuid
 import csv
 import io
@@ -17,6 +17,7 @@ from app.database import get_db
 from app.models import BankTransaction, GLEntry, Match, BankAccount
 from app.engine.matching import MatchingEngine, Transaction, MatchResult
 from app.engine.fee_extractor import FeeExtractor
+from app.engine.explainer import generate_explanation, ExplainabilityEngine
 
 router = APIRouter(prefix="/api/reconciliation", tags=["reconciliation"])
 
@@ -78,6 +79,94 @@ def parse_cbe_csv(content: str) -> List[dict]:
     return transactions
 
 
+def parse_gl_csv(content: str) -> List[Transaction]:
+    """Parse GL CSV export (from Peachtree or generic format)"""
+    reader = csv.DictReader(io.StringIO(content))
+    entries = []
+
+    # Try common column name variations
+    col_maps = [
+        # Peachtree export format
+        {"date": ["Date", "Entry Date", "Transaction Date", "ቀን"],
+         "debit": ["Debit", "Debit Amount", "Debit ETB", "ድ nợ"],
+         "credit": ["Credit", "Credit Amount", "Credit ETB", "እዳ"],
+         "reference": ["Reference", "Ref", "Memo", "ማጣቀሻ"],
+         "description": ["Description", "Narration", "Details", "መግለጫ"],
+         "account_code": ["Account", "Account Code", "GL Account", "Acct #"],
+         "account_name": ["Account Name", "Account Description"],
+         "journal": ["Journal", "Journal #", "JE Number", "Batch"]}
+    ]
+
+    for i, row in enumerate(reader):
+        # Normalize keys
+        normalized = {k.strip().upper(): v.strip() for k, v in row.items()}
+
+        # Extract fields with fallback
+        def find_val(keys):
+            for k in keys:
+                for nk, nv in normalized.items():
+                    if k.upper() in nk:
+                        return nv
+            return ""
+
+        col_map = col_maps[0]
+        date_str = find_val(col_map["date"])
+        debit_str = find_val(col_map["debit"]).replace(",", "").replace('"', '')
+        credit_str = find_val(col_map["credit"]).replace(",", "").replace('"', '')
+        ref = find_val(col_map["reference"])
+        desc = find_val(col_map["description"])
+        acct_code = find_val(col_map["account_code"])
+        acct_name = find_val(col_map["account_name"])
+        journal = find_val(col_map["journal"])
+
+        # Parse amounts
+        try:
+            debit = float(debit_str) if debit_str else 0.0
+        except ValueError:
+            debit = 0.0
+        try:
+            credit = float(credit_str) if credit_str else 0.0
+        except ValueError:
+            credit = 0.0
+
+        if debit == 0 and credit == 0:
+            continue
+
+        # Parse date
+        txn_date = _parse_date(date_str)
+        if txn_date is None:
+            continue
+
+        entries.append(Transaction(
+            id=f"gl-{i+1}",
+            date=txn_date,
+            amount=debit if debit > 0 else -credit,
+            reference=ref,
+            description=desc,
+        ))
+
+    return entries
+
+
+def _parse_date(date_str: str) -> Optional[date]:
+    """Try multiple date formats"""
+    if not date_str:
+        return None
+    formats = [
+        "%d/%m/%Y",   # CBE format: 15/06/2026
+        "%Y-%m-%d",   # ISO: 2026-06-15
+        "%m/%d/%Y",   # US: 06/15/2026
+        "%d-%m-%Y",   # EU: 15-06-2026
+        "%d.%m.%Y",   # Dotted: 15.06.2026
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str.strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 @router.post("/run")
 async def run_reconciliation(
     bank_csv: UploadFile = File(...),
@@ -88,6 +177,9 @@ async def run_reconciliation(
     """
     Run reconciliation with fee extraction.
     
+    Accepts bank CSV (required) and GL CSV (optional).
+    If no GL CSV provided, uses mock entries for demo.
+    
     Returns matches with fee breakdown and explanations.
     """
     # Parse bank CSV
@@ -95,16 +187,13 @@ async def run_reconciliation(
     content_str = content.decode("utf-8-sig")
     
     if "ቀን" in content_str or "ክፍያ" in content_str:
-        # CBE format (Amharic)
         parsed_txns = parse_cbe_csv(content_str)
     else:
-        # Generic CSV
         parsed_txns = parse_cbe_csv(content_str)
     
     # Convert to engine Transaction objects
     bank_transactions = []
     for txn in parsed_txns:
-        # Parse date (DD/MM/YYYY for CBE)
         date_parts = txn["date"].split("/")
         txn_date = date(int(date_parts[2]), int(date_parts[1]), int(date_parts[0]))
         
@@ -121,61 +210,69 @@ async def run_reconciliation(
             net_amount=txn["net_amount"]
         ))
     
-    # Mock GL entries for demo (in production, parse GL CSV)
-    gl_entries = [
-        Transaction(
-            id="gl-1",
-            date=date(2026, 6, 15),
-            amount=100040.00,
-            reference="INV-2026-0089",
-            description="Payment to ABC Trading"
-        ),
-        Transaction(
-            id="gl-2",
-            date=date(2026, 6, 16),
-            amount=50011.50,
-            reference="SALARY-JUN",
-            description="Salary payment"
-        ),
-        Transaction(
-            id="gl-3",
-            date=date(2026, 6, 17),
-            amount=75028.75,
-            reference="TRANSFER-FEE-001",
-            description="Transfer to Dashen"
-        ),
-        Transaction(
-            id="gl-4",
-            date=date(2026, 6, 18),
-            amount=15017.25,
-            reference="SO-001",
-            description="Standing order rent"
-        ),
-        Transaction(
-            id="gl-5",
-            date=date(2026, 6, 20),
-            amount=100115.00,
-            reference="CERT-001",
-            description="Balance certificate"
-        ),
-    ]
+    # Parse GL CSV or use mock
+    if gl_csv:
+        gl_content = await gl_csv.read()
+        gl_str = gl_content.decode("utf-8-sig")
+        gl_entries = parse_gl_csv(gl_str)
+    else:
+        # Mock GL entries for demo
+        gl_entries = [
+            Transaction(id="gl-1", date=date(2026, 6, 15), amount=100040.00,
+                        reference="INV-2026-0089", description="Payment to ABC Trading"),
+            Transaction(id="gl-2", date=date(2026, 6, 16), amount=50011.50,
+                        reference="SALARY-JUN", description="Salary payment"),
+            Transaction(id="gl-3", date=date(2026, 6, 17), amount=75028.75,
+                        reference="TRANSFER-FEE-001", description="Transfer to Dashen"),
+            Transaction(id="gl-4", date=date(2026, 6, 18), amount=15017.25,
+                        reference="SO-001", description="Standing order rent"),
+            Transaction(id="gl-5", date=date(2026, 6, 20), amount=100115.00,
+                        reference="CERT-001", description="Balance certificate"),
+        ]
     
     # Run matching engine
     engine = MatchingEngine()
     matches = engine.run(bank_transactions, gl_entries)
     
+    # Build explainability engine
+    explainer = ExplainabilityEngine()
+    all_bank_dicts = [
+        {"id": t.id, "date": str(t.date), "amount": t.amount, "reference": t.reference, "description": t.description}
+        for t in bank_transactions
+    ]
+    
     # Format response
     results = []
     for match in matches:
-        # Get the bank transaction details
         bt_id = match.bank_transaction_ids[0]
         bt = next((t for t in bank_transactions if t.id == bt_id), None)
+        gl_id = match.gl_entry_ids[0] if match.gl_entry_ids else None
+        gl = next((t for t in gl_entries if t.id == gl_id), None) if gl_id else None
+        
+        # Build txn dicts for explainer
+        bt_dict = {"id": bt.id, "date": str(bt.date), "amount": bt.amount, "reference": bt.reference, "description": bt.description} if bt else {}
+        gl_dict = {"id": gl.id, "date": str(gl.date), "amount": gl.amount, "reference": gl.reference, "description": gl.description} if gl else None
+        
+        # Generate rich explanation
+        rich_explanation = generate_explanation(
+            match_type=match.match_type,
+            confidence=match.confidence,
+            bank_txn=bt_dict,
+            gl_entry=gl_dict,
+            gl_entries=None,
+            fee_breakdown=match.fee_breakdown,
+        )
+        
+        # Detect anomalies
+        anomalies = explainer.detect_anomalies(bt_dict, all_bank_dicts)
+        rich_explanation["anomaly_flags"] = anomalies
         
         result = {
             "match_id": str(uuid.uuid4()),
             "match_type": match.match_type,
             "confidence": match.confidence,
             "explanation": match.explanation,
+            "rich_explanation": rich_explanation,
             "status": match.status,
             "amount_strategy": match.amount_strategy,
             "bank_transaction": {
@@ -186,7 +283,8 @@ async def run_reconciliation(
                 "description": bt.description[:50] if bt else None,
             },
             "gl_entry_ids": match.gl_entry_ids,
-            "fee_breakdown": match.fee_breakdown
+            "fee_breakdown": match.fee_breakdown,
+            "anomaly_flags": anomalies,
         }
         results.append(result)
     

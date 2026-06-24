@@ -269,18 +269,17 @@ async def run_reconciliation(
         # Parse PDF
         pdf_result = parse_cbe_pdf(content, filename)
         
-        if pdf_result["errors"]:
-            # Check if balance verification failed
-            if pdf_result["verification"]["status"] == "failed":
-                raise HTTPException(
-                    status_code=422,
-                    detail={
-                        "error": "balance_verification_failed",
-                        "message": pdf_result["verification"]["message"],
-                        "verification": pdf_result["verification"],
-                        "extraction_errors": pdf_result["errors"],
-                    }
-                )
+        # Check balance verification FIRST — this is a hard gate
+        if pdf_result["verification"]["status"] == "failed":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "balance_verification_failed",
+                    "message": pdf_result["verification"]["message"],
+                    "verification": pdf_result["verification"],
+                    "extraction_errors": pdf_result["errors"],
+                }
+            )
         
         parsed_txns = pdf_result["transactions"]
         pdf_info = {

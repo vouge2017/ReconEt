@@ -338,6 +338,9 @@ class CBEPDFAdapter:
         if not transactions:
             transactions = self._parse_from_text(extraction.full_text, account_type)
         
+        # Pattern 3: Group fee rows with their parent transactions
+        transactions = self._group_fee_rows(transactions)
+        
         # Sort by date
         transactions.sort(key=lambda t: t.date)
         
@@ -346,6 +349,59 @@ class CBEPDFAdapter:
             txn.row_index = i + 1
         
         return transactions
+    
+    def _group_fee_rows(self, transactions: List[CBETransaction]) -> List[CBETransaction]:
+        """
+        Fee Pattern 3: Group fee rows with their parent transactions.
+        
+        CBE sometimes shows fees as separate rows:
+        15/06/2026  TRANSFER TO ABC    FT-001    100,000.00
+        15/06/2026  SERVICE CHARGE     FEE-001        25.00
+        
+        This method detects fee rows and merges them into the parent.
+        """
+        if len(transactions) < 2:
+            return transactions
+        
+        # Fee row keywords
+        fee_keywords = [
+            "SERVICE CHARGE", "BANK FEE", "TRANSFER FEE", "COMMISSION",
+            "STAMP DUTY", "BANK CHARGE", "FEE", "CHARGE", "VAT",
+        ]
+        
+        result = []
+        i = 0
+        while i < len(transactions):
+            txn = transactions[i]
+            
+            # Check if this is a fee row
+            is_fee_row = False
+            if txn.debit > 0 and txn.credit == 0:
+                desc_upper = (txn.narrative or txn.particulars or "").upper()
+                ref_upper = (txn.reference or "").upper()
+                for kw in fee_keywords:
+                    if kw in desc_upper or kw in ref_upper:
+                        is_fee_row = True
+                        break
+            
+            if is_fee_row and len(result) > 0:
+                # Merge with previous transaction
+                parent = result[-1]
+                parent.fee_amount += txn.debit
+                # Guess if it's bank charge or tax (15% VAT)
+                estimated_tax = txn.debit * 0.15 / 1.15
+                estimated_charge = txn.debit - estimated_tax
+                parent.bank_charge += estimated_charge
+                parent.gov_tax += estimated_tax
+                parent.gross_amount = parent.debit if parent.debit > 0 else parent.credit
+                parent.net_amount = parent.gross_amount
+                i += 1
+                continue
+            
+            result.append(txn)
+            i += 1
+        
+        return result
     
     def _parse_table(
         self, table: ExtractedTable, account_type: CBEAccountType
@@ -440,8 +496,8 @@ class CBEPDFAdapter:
         if debit == 0 and credit == 0:
             return None
         
-        # Classify reference code
-        ref_code, ref_desc = classify_reference_code(reference)
+        # Classify reference code (pass bank name for bank-specific codes)
+        ref_code, ref_desc = classify_reference_code(reference, bank="cbe")
         cheque_num = extract_cheque_number(reference, narrative)
         
         # Combine narrative and particulars for description
@@ -545,7 +601,7 @@ class CBEPDFAdapter:
             elif len(amount_values) == 1:
                 debit = amount_values[0]
             
-            ref_code, ref_desc = classify_reference_code(narrative)
+            ref_code, ref_desc = classify_reference_code(narrative, bank="cbe")
             
             transactions.append(CBETransaction(
                 date=txn_date,

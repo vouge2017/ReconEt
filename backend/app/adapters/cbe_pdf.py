@@ -144,27 +144,24 @@ class CBEPDFAdapter:
     }
     
     # Column layouts for each account type
-    # Order matters — we match columns by header text
+    # Based on REAL CBE statement analysis (June 2026)
+    # Actual columns: Date | Reference | Description | Debit | Credit | Balance
     COLUMN_LAYOUTS = {
         CBEAccountType.SAVINGS: {
             "date": ["Date"],
-            "value_date": ["Value Date", "ValueDate", "Val Date"],
-            "particulars": ["Particulars", "Particular"],
-            "reference": ["Reference", "Ref", "Ref No"],
-            "narrative": ["Narrative", "Narration", "Description", "Details"],
+            "reference": ["Reference", "Chq No/Ref", "Chq No", "Ref"],
+            "description": ["Description", "Particulars", "Narrative", "Narration", "Details"],
             "debit": ["Debit", "Debit Amount", "Withdrawal", "Dr"],
             "credit": ["Credit", "Credit Amount", "Deposit", "Cr"],
-            "balance": ["Balances", "Balance", "Running Balance", "Bal"],
+            "balance": ["Balance", "Balances", "Running Balance", "Bal"],
         },
         CBEAccountType.CURRENT: {
             "date": ["Date"],
-            "particulars": ["Particulars", "Particular"],
-            "reference": ["Reference", "Ref", "Ref No"],
-            "narrative": ["Narrative", "Narration", "Description", "Details"],
-            "value_date": ["Value Date", "ValueDate", "Val Date"],
+            "reference": ["Reference", "Chq No/Ref", "Chq No", "Ref"],
+            "description": ["Description", "Particulars", "Narrative", "Narration", "Details"],
             "debit": ["Debit", "Debit Amount", "Withdrawal", "Dr"],
             "credit": ["Credit", "Credit Amount", "Deposit", "Cr"],
-            "balance": ["Balances", "Balance", "Running Balance", "Bal"],
+            "balance": ["Balance", "Balances", "Running Balance", "Bal"],
         },
     }
     
@@ -462,6 +459,9 @@ class CBEPDFAdapter:
             if not text:
                 return 0.0
             text = text.strip().replace(",", "").replace(" ", "")
+            # Handle dash or empty for no amount
+            if text == "-" or text == "":
+                return 0.0
             try:
                 return float(text)
             except ValueError:
@@ -476,13 +476,8 @@ class CBEPDFAdapter:
         if not txn_date:
             return None
         
-        # Get value date
-        value_date_str = get_value("value_date")
-        value_date = parse_cbe_date(value_date_str) if value_date_str else None
-        
-        # Get text fields
-        narrative = get_value("narrative")
-        particulars = get_value("particulars")
+        # Get text fields (actual CBE format: Description, not Narrative/Particulars)
+        description = get_value("description")
         reference = get_value("reference")
         
         # Get amounts
@@ -492,22 +487,23 @@ class CBEPDFAdapter:
         if balance == 0 and not get_value("balance"):
             balance = None
         
-        # Skip rows with no amount
+        # Skip rows with no amount (header rows, empty rows)
         if debit == 0 and credit == 0:
+            return None
+        
+        # Skip closing balance rows (they have "CLOSING BALANCE" in description)
+        if description and "CLOSING BALANCE" in description.upper():
             return None
         
         # Classify reference code (pass bank name for bank-specific codes)
         ref_code, ref_desc = classify_reference_code(reference, bank="cbe")
-        cheque_num = extract_cheque_number(reference, narrative)
-        
-        # Combine narrative and particulars for description
-        description = narrative or particulars
+        cheque_num = extract_cheque_number(reference, description)
         
         return CBETransaction(
             date=txn_date,
-            value_date=value_date,
-            narrative=narrative,
-            particulars=particulars,
+            value_date=None,  # CBE doesn't show value date in statements
+            narrative=description,
+            particulars="",
             reference=reference,
             debit=debit,
             credit=credit,

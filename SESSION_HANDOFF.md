@@ -1,162 +1,165 @@
 # ReconET — Session Handoff
 
-**Date:** June 24, 2026
-**Previous Session:** Added Explainability Engine, Cheques UI, GL CSV upload, rich explanations
-**This Session:** Added CBE PDF adapter, balance verification, Ethiopian calendar, PDF pipeline
+**Date:** June 24, 2026 (End of Day)
+**Previous Session:** Built core platform, PDF adapter, explainability engine
+**This Session:** Real CBE data analysis, security fixes, fuzzy matching, feedback incorporation
 
 ---
 
-## What Was Done This Session
+## What Was Done Today
 
-### 1. Ethiopian Calendar Converter (`engine/ethiopian_calendar.py`)
+### 1. Analyzed Real CBE Statement
+- User provided actual CBE PDF statement (18 pages, scanned)
+- Confirmed 8-column format: Date | Particulars | Reference | Narrative | Value Date | Debit | Credit | Balance
+- Reference codes: FT = Fund Transfer, TT = Cash Transaction
+- PDF is image-based (needs OCR, not text extraction)
 
-Handles CBE's use of Ethiopian (Ge'ez) calendar dates:
-- `ethiopian_to_gregorian()` — Converts Ge'ez dates to Gregorian
-- `gregorian_to_ethiopian()` — Reverse conversion
-- `parse_cbe_date()` — Auto-detects and converts CBE date formats
-- `classify_reference_code()` — Extracts FT, CHQ, CD, CPO, ECS, PKR, VPCH codes
-- `extract_cheque_number()` — Extracts cheque numbers from reference/description
+### 2. Incorporated External Feedback
 
-### 2. Balance Verifier (`engine/balance_verifier.py`)
+**From Kimi AI:**
+- Reference codes configurable per bank ✅
+- Fiscal year configurable (Ethiopian vs Gregorian) ✅
+- Fee patterns are 4 not 1 ✅
+- 3 banks for MVP (CBE, Dashen, Awash) ✅
+- NYLOS integration potential ✅
 
-Pre-upload gate that verifies: `opening + credits - debits = closing`
-- Tolerance: 0.01 ETB
-- Three statuses: passed, warning (≤1.0 ETB diff), failed
-- Rejects upload if balance doesn't match
-- Also provides `verify_running_balances()` for per-transaction verification
+**From ChatGPT:**
+- Pain > Parsing (already addressed via Explainability Engine)
+- Competitors are indirect (Excel, Sage, ERPNext)
+- Validate "PDF only" with corporate portal question
 
-### 3. PDF Extraction Wrapper (`engine/pdf_extractor.py`)
+### 3. Open Source Tools Researched & Integrated
 
-Unified interface for extracting text and tables from PDFs:
-- **pdfplumber** (primary) — best for text-based PDFs with tables
-- **camelot-py** (fallback) — better for complex table layouts
-- **Tesseract + amh** (scanned PDFs) — Amharic OCR support
-- **PaddleOCR** (messy scans) — last resort
-- Auto-detects PDF type (text-based vs scanned)
+| Tool | Status | Use |
+|------|--------|-----|
+| py-ethiopian-date-converter | ✅ Integrated | Ethiopian ↔ Gregorian calendar |
+| Splink | ✅ Integrated | Fuzzy transaction matching |
+| CBE tariff database | ✅ Built | Fee pattern 4 (deducted but not itemized) |
+| NYLOS | 📋 Researched | Ethiopian ERP, potential GL source |
+| Indian-Bank-Statements (HuggingFace) | 📋 Researched | Reference for synthetic data |
 
-### 4. CBE PDF Adapter (`adapters/cbe_pdf.py`)
+### 4. Security Quick Wins
 
-Parses CBE PDF bank statements with auto-detection:
-- **4 account types**: Savings, Current, Current with Overdraft, Time Deposit
-- **Column layouts**: Different header orders per account type
-- **Auto-detection**: Reads PDF content to determine account type
-- **Fee extraction**: Integrates with FeeExtractor for each transaction
-- **Reference codes**: Classifies FT, CHQ, CD, CPO, ECS, PKR, VPCH
-- **Cheque numbers**: Extracts from CHQ references
+| Fix | Status |
+|-----|--------|
+| CORS restricted to localhost | ✅ Done |
+| File upload limit (50MB) | ✅ Done |
+| Basic logging | ✅ Done |
+| JWT authentication | 📋 Week 2 |
+| Rate limiting | 📋 Week 2 |
 
-### 5. Updated Reconciliation API
+### 5. Code Fixes
 
-- Accepts both PDF and CSV uploads (auto-detected from filename/magic bytes)
-- Parameter renamed from `bank_csv` to `bank_file`
-- PDF flow: parse → balance verify → extract fees → match → explain
-- Returns `balance_verification` and `pdf_info` in response
-- Rejects with 422 if balance verification fails
-
-### 6. Updated Frontend
-
-- File input now accepts `.pdf,.csv`
-- Button text changed to "Upload Bank Statement"
-- Added `BalanceVerificationCard` component
-- Shows balance verification status (✅ passed, ⚠️ warning, ❌ failed)
-- Displays opening/closing balances, credits, debits
-
-### 7. Updated Docker/Requirements
-
-- `requirements.txt`: Added pdfplumber, camelot-py, pytesseract, pdf2image, Pillow
-- `Dockerfile`: Added tesseract-ocr, tesseract-ocr-amh, poppler-utils, ghostscript
-
-### 8. Sample PDF Generator (`create_sample_cbe_pdf.py`)
-
-Creates realistic CBE-style PDF for testing:
-- Uses reportlab or fpdf2
-- Current Account layout (Date | Particulars | Reference | Narrative | ...)
-- 10 transactions with fees, cheques, transfers
-- Opening/closing balances that verify
-
-### 9. Integration Test (`test_cbe_pdf.sh`)
-
-Tests the full pipeline:
-- API health check
-- PDF upload + balance verification
-- CSV backward compatibility
-- Fee extraction from PDF
-- Cheque detection from PDF
+- CBE PDF adapter: Updated to 8-column format
+- Fee extractor: Tariff DB wired as fallback (pattern 4)
+- Fee extractor: Fixed double-counting bug
+- Balance verifier: Now rejects uploads when verification fails
+- Matching engine: Added Phase 3 fuzzy matching
+- PDF extractor: English-primary OCR (Amharic fallback)
+- Reference codes: FT, TT definitions corrected
 
 ---
 
-## Files Created/Modified
+## Files Modified Today
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/app/engine/ethiopian_calendar.py` | NEW | Ge'ez → Gregorian, reference codes |
-| `backend/app/engine/balance_verifier.py` | NEW | Pre-upload balance verification |
-| `backend/app/engine/pdf_extractor.py` | NEW | PDF text/table extraction wrapper |
-| `backend/app/adapters/cbe_pdf.py` | NEW | CBE PDF parser (4 account types) |
-| `backend/app/adapters/__init__.py` | MODIFIED | Export CBE PDF adapter |
-| `backend/app/api/reconciliation.py` | REWRITTEN | PDF + CSV support |
-| `backend/requirements.txt` | MODIFIED | Added PDF dependencies |
-| `backend/Dockerfile` | MODIFIED | Added OCR system deps |
-| `backend/create_sample_cbe_pdf.py` | NEW | Sample PDF generator |
-| `frontend/src/pages/Reconciliation.tsx` | MODIFIED | PDF support, balance card |
-| `test_cbe_pdf.sh` | NEW | Integration test |
-| `PROJECT_CONTEXT.md` | UPDATED | PDF pipeline docs |
-| `SESSION_HANDOFF.md` | UPDATED | This file |
+| File | Change |
+|------|--------|
+| `backend/app/adapters/cbe_pdf.py` | 8-column format, reference codes |
+| `backend/app/engine/fee_extractor.py` | Tariff DB fallback, bug fixes |
+| `backend/app/engine/fuzzy_matcher.py` | NEW — Splink integration |
+| `backend/app/engine/matching.py` | Phase 3 fuzzy matching |
+| `backend/app/engine/pdf_extractor.py` | English-primary OCR |
+| `backend/app/engine/ethiopian_calendar.py` | Library integration, configurable codes |
+| `backend/app/engine/tariff_db.py` | NEW — CBE fee tariff database |
+| `backend/app/main.py` | CORS fix, logging |
+| `backend/app/api/reconciliation.py` | File size limits |
+| `backend/requirements.txt` | Added splink, py-ethiopian-date-converter |
+| `data/real_cbe_samples/` | NEW — Real CBE PDF + images |
 
 ---
 
-## What's Next
+## Project Status
 
-### Immediate (this week — Friday demo)
-1. **Test with real CBE PDF** — Validate on actual bank statement
-2. **Verify balance verification** — Ensure it catches parsing errors
-3. **Check fee extraction** — Confirm fees extracted from PDF-parsed data
-4. **Deploy to staging** — Push with PostgreSQL for pilot testing
+### ✅ Built (Ready for Testing)
+- CBE PDF adapter (8-column format)
+- Balance verification (hard gate)
+- Fee extraction (4 patterns)
+- Matching engine (exact + date-shifted + fuzzy)
+- Explainability engine (IFRS references, Amharic)
+- Cheque tracking (API + UI)
+- Ethiopian calendar (library + fallback)
+- Security quick wins (CORS, file limits, logging)
 
-### Short-term (next week)
-1. **Cheque matching** — Auto-match CHQ references to cheque register
-2. **Audit trail export** — Export matches + explanations to Excel
-3. **Multi-bank adapters** — Dashen, Awash, Ecobank PDF formats
-
-### Medium-term (2-3 weeks)
-1. **Bilingual UI** — Full Amharic interface
-2. **Correction learning** — User overrides improve future confidence
-3. **FX rate integration** — Auto-fetch NBE daily rates
-4. **Telegram notifications** — Alert on stale cheques, anomalies
-
----
-
-## Known Issues
-
-1. **PDF parsing accuracy** — Depends on PDF quality; scanned PDFs need OCR
-2. **Ethiopian calendar detection** — Heuristic-based; may need refinement with real data
-3. **Column mapping** — Different CBE branches may have slightly different layouts
-4. **No GL CSV upload in PDF mode** — GL still uses mock entries when PDF uploaded
-5. **No auth** — No user authentication yet (planned for Phase 2)
+### 📋 TODO (After Friday Validation)
+- JWT authentication
+- Rate limiting
+- Input validation
+- Alembic migrations
+- Excel export
+- Dashen/Awash adapters
+- SOC 2 (if enterprise customers ask)
 
 ---
 
-## Critical Context for Next Session
+## Friday Test Plan
 
-- **CBE only provides PDF** — CSV is fallback for other banks/testing
-- **Balance verification is a HARD gate** — If it fails, reject upload
-- **Ethiopian calendar** — CBE dates may be Ge'ez; must convert to Gregorian
-- **Reference codes drive matching** — FT=intercompany, CHQ=cheque register
-- **4 CBE account types** — Auto-detect from PDF content
-- **Friday is the deadline** — Must work with real CBE PDF
+| # | Test | Expected |
+|---|------|----------|
+| 1 | Upload real CBE PDF | Parse without errors |
+| 2 | Balance verification | Pass (opening + credits - debits = closing) |
+| 3 | Fee extraction | Extract fees from transactions |
+| 4 | Matching engine | Match bank txns to GL entries |
+| 5 | Explainability | Show IFRS references and explanations |
+| 6 | Cheque detection | Identify CHQ transactions |
 
 ---
 
-## The Contract
+## Customer Discovery Questions (For Friday)
 
-| Deliverable | Status |
-|-------------|--------|
-| CBE PDF adapter | ✅ Built |
-| Balance verification | ✅ Built |
-| Ethiopian calendar | ✅ Built |
-| PDF extraction wrapper | ✅ Built |
-| Frontend PDF support | ✅ Built |
-| Integration test | ✅ Built |
-| Sample CBE PDF | ✅ Built |
-| Real CBE PDF test | ⏳ Friday |
-| PostgreSQL migration | 🚧 In progress |
-| Cheque tracking | ✅ API + UI built |
+| # | Question |
+|---|----------|
+| 1 | Which CBE portal do you use? Corporate or retail? |
+| 2 | Does corporate portal have Excel/CSV export? |
+| 3 | Do you use Ethiopian or Gregorian fiscal year? |
+| 4 | How are fees shown? Embedded, separate line, separate row, or not itemized? |
+| 5 | Do you use NYLOS or another ERP? |
+| 6 | Can your ERP export GL data? What format? |
+| 7 | How many banks do you reconcile? Which ones? |
+| 8 | What was your hardest reconciliation this year? |
+| 9 | If a tool cut this time by 80%, who would approve it? |
+| 10 | Can I watch you reconcile next month-end? |
+
+---
+
+## Key Decisions Made
+
+1. **8 columns, not 6** — CBE format confirmed by user
+2. **FT = Fund Transfer, TT = Cash** — Reference codes clarified
+3. **English primary** — Most statements are English, Amharic is edge case
+4. **3 banks for MVP** — CBE, Dashen, Awash (not all 32)
+5. **Fiscal year configurable** — Gregorian default, Ethiopian option
+6. **SOC 2 later** — Not needed until enterprise customers ask
+7. **Fuzzy matching via Splink** — For hard cases exact matching misses
+
+---
+
+## Critical Context for Tomorrow
+
+- **Real CBE PDF is scanned** — Needs OCR (Tesseract), not text extraction
+- **8-column format** — Date | Particulars | Reference | Narrative | Value Date | Debit | Credit | Balance
+- **Balance verification is a hard gate** — Reject if doesn't match
+- **Fee extraction has 4 patterns** — Embedded, separate line, separate row, tariff estimate
+- **Friday is validation, not launch** — Pass = proceed, fail = fix
+
+---
+
+## GitHub Status
+
+All code pushed to `https://github.com/vouge2017/ReconEt.git`
+
+Latest commits:
+- `fc3604f` — Quick security wins (CORS, file limits, logging)
+- `e58b1ba` — Correct CBE format to 8 columns
+- `2cd1766` — Update CBE adapter to match REAL statement format
+- `3d5b9af` — Add fuzzy matching, English-primary OCR
+- `803389b` — Wire tariff DB, fix fee patterns

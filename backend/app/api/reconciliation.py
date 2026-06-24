@@ -255,8 +255,19 @@ async def run_reconciliation(
     
     Returns matches with fee breakdown, explanations, and balance verification.
     """
+    # File size limit: 50MB
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+    
     # Read file content
     content = await bank_file.read()
+    
+    # Check file size
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is 50MB."
+        )
+    
     filename = bank_file.filename or "statement"
     
     # Detect file type

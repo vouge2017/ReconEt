@@ -2,10 +2,18 @@
 ReconET — Ethiopian Treasury Reconciliation Platform
 Main FastAPI application
 """
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import reconciliation, cheques
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ReconET API",
@@ -13,18 +21,27 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS for frontend
+# CORS for frontend — restrict in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
 # Include routers
 app.include_router(reconciliation.router)
 app.include_router(cheques.router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("ReconET API starting...")
 
 
 @app.get("/")

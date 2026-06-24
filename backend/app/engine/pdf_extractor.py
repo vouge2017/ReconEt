@@ -274,7 +274,7 @@ class PDFExtractor:
         raise RuntimeError("No OCR engine available. Install pytesseract or paddleocr.")
     
     def _extract_with_tesseract(self, pdf_source) -> PDFExtractionResult:
-        """Extract using Tesseract with Amharic support"""
+        """Extract using Tesseract — English primary, Amharic secondary"""
         import pytesseract
         from pdf2image import convert_from_bytes, convert_from_path
         
@@ -290,11 +290,28 @@ class PDFExtractor:
         full_text_parts = []
         
         for i, image in enumerate(images):
-            # Try Amharic first, fall back to English
+            # English primary — most Ethiopian bank statements are in English
+            # Amharic only for edge cases (customer descriptions, letter numbers)
             try:
-                text = pytesseract.image_to_string(image, lang='amh+eng')
-            except pytesseract.TesseractError:
+                # Try English first (primary)
                 text = pytesseract.image_to_string(image, lang='eng')
+                
+                # If English result seems poor (few numbers), try with Amharic
+                # This handles cases where Amharic text is mixed in
+                if not re.search(r'\d{2,}', text):
+                    try:
+                        text_amh = pytesseract.image_to_string(image, lang='amh+eng')
+                        # Use Amharic result if it has more content
+                        if len(text_amh) > len(text) * 1.2:
+                            text = text_amh
+                    except pytesseract.TesseractError:
+                        pass
+            except pytesseract.TesseractError:
+                # Fallback to Amharic+English
+                try:
+                    text = pytesseract.image_to_string(image, lang='amh+eng')
+                except pytesseract.TesseractError:
+                    text = pytesseract.image_to_string(image, lang='eng')
             
             full_text_parts.append(text)
             pages.append(ExtractedPage(

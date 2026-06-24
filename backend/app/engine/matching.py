@@ -92,6 +92,18 @@ class MatchingEngine:
                 if best_match.gl_entry_ids:
                     matched_gl_ids.update(best_match.gl_entry_ids)
 
+        # Phase 3: Fuzzy matches (for remaining unmatched transactions)
+        remaining_bank = [t for t in bank_transactions if t.id not in matched_bank_ids]
+        remaining_gl = [t for t in gl_entries if t.id not in matched_gl_ids]
+        
+        if remaining_bank and remaining_gl:
+            fuzzy_matches = self._run_fuzzy_matching(remaining_bank, remaining_gl)
+            matches.extend(fuzzy_matches)
+            for m in fuzzy_matches:
+                matched_bank_ids.update(m.bank_transaction_ids)
+                if m.gl_entry_ids:
+                    matched_gl_ids.update(m.gl_entry_ids)
+
         # Sort by confidence
         matches.sort(key=lambda m: m.confidence, reverse=True)
         
@@ -347,3 +359,99 @@ class MatchingEngine:
         ref1 = ref1.upper().strip()
         ref2 = ref2.upper().strip()
         return ref1 in ref2 or ref2 in ref1
+
+    def _run_fuzzy_matching(
+        self, 
+        bank_transactions: List[Transaction], 
+        gl_entries: List[Transaction]
+    ) -> List[MatchResult]:
+        """
+        Phase 3: Fuzzy matching for remaining unmatched transactions.
+        
+        Uses simple fuzzy matching (Splink integration can be added later).
+        Handles:
+        - Fuzzy reference matching
+        - Amount tolerance matching
+        - Date tolerance matching
+        """
+        matches = []
+        used_gl_ids = set()
+        
+        for bt in bank_transactions:
+            best_match = None
+            best_score = 0.0
+            
+            bt_amount = abs(bt.net_amount if bt.net_amount is not None else bt.amount)
+            bt_ref = (bt.reference or "").upper().strip()
+            bt_desc = (bt.description or "").upper().strip()
+            
+            for gl in gl_entries:
+                if gl.id in used_gl_ids:
+                    continue
+                
+                gl_amount = abs(gl.amount)
+                gl_ref = (gl.reference or "").upper().strip()
+                gl_desc = (gl.description or "").upper().strip()
+                
+                # Calculate match score
+                score = 0.0
+                
+                # Amount match (weight: 40%)
+                amount_diff = abs(bt_amount - gl_amount)
+                if amount_diff <= self.amount_tolerance:
+                    score += 0.4
+                elif amount_diff <= self.amount_tolerance * 10:
+                    score += 0.4 * (1.0 - amount_diff / (self.amount_tolerance * 10))
+                
+                # Date match (weight: 25%)
+                date_diff = abs((bt.date - gl.date).days)
+                if date_diff == 0:
+                    score += 0.25
+                elif date_diff <= self.date_tolerance:
+                    score += 0.25 * (1.0 - date_diff / (self.date_tolerance + 1))
+                
+                # Reference match (weight: 20%)
+                if bt_ref and gl_ref:
+                    if bt_ref == gl_ref:
+                        score += 0.2
+                    elif bt_ref in gl_ref or gl_ref in bt_ref:
+                        score += 0.15
+                    else:
+                        # Simple character similarity
+                        common = sum(1 for a, b in zip(bt_ref, gl_ref) if a == b)
+                        max_len = max(len(bt_ref), len(gl_ref))
+                        if max_len > 0:
+                            score += 0.2 * (common / max_len)
+                
+                # Description match (weight: 15%)
+                if bt_desc and gl_desc:
+                    bt_words = set(bt_desc.split())
+                    gl_words = set(gl_desc.split())
+                    common_words = bt_words & gl_words
+                    if common_words:
+                        score += 0.15 * (len(common_words) / max(len(bt_words), len(gl_words)))
+                
+                if score > best_score and score > 0.5:
+                    best_score = score
+                    best_match = gl
+            
+            if best_match:
+                used_gl_ids.add(best_match.id)
+                confidence = int(best_score * 100)
+                
+                explanation = (
+                    f"Fuzzy match: amount ETB {bt_amount:,.2f} · "
+                    f"score {best_score:.1%} · "
+                    f"ref '{bt_ref}' ~ '{(best_match.reference or '').upper().strip()}'"
+                )
+                
+                matches.append(MatchResult(
+                    match_type="fuzzy_match",
+                    confidence=confidence,
+                    explanation=explanation,
+                    bank_transaction_ids=[bt.id],
+                    gl_entry_ids=[best_match.id],
+                    amount_strategy="fuzzy"
+                ))
+        
+        return matches

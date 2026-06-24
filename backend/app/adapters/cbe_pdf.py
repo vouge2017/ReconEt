@@ -144,21 +144,25 @@ class CBEPDFAdapter:
     }
     
     # Column layouts for each account type
-    # Based on REAL CBE statement analysis (June 2026)
-    # Actual columns: Date | Reference | Description | Debit | Credit | Balance
+    # Based on REAL CBE statement (user confirmed June 2026)
+    # Actual columns: Date | Particulars | Reference | Narrative | Value Date | Debit | Credit | Balance
     COLUMN_LAYOUTS = {
         CBEAccountType.SAVINGS: {
             "date": ["Date"],
-            "reference": ["Reference", "Chq No/Ref", "Chq No", "Ref"],
-            "description": ["Description", "Particulars", "Narrative", "Narration", "Details"],
+            "particulars": ["Particulars", "Particular"],
+            "reference": ["Reference", "Ref", "Ref No", "Chq No/Ref"],
+            "narrative": ["Narrative", "Narration", "Description", "Details"],
+            "value_date": ["Value Date", "ValueDate", "Val Date"],
             "debit": ["Debit", "Debit Amount", "Withdrawal", "Dr"],
             "credit": ["Credit", "Credit Amount", "Deposit", "Cr"],
             "balance": ["Balance", "Balances", "Running Balance", "Bal"],
         },
         CBEAccountType.CURRENT: {
             "date": ["Date"],
-            "reference": ["Reference", "Chq No/Ref", "Chq No", "Ref"],
-            "description": ["Description", "Particulars", "Narrative", "Narration", "Details"],
+            "particulars": ["Particulars", "Particular"],
+            "reference": ["Reference", "Ref", "Ref No", "Chq No/Ref"],
+            "narrative": ["Narrative", "Narration", "Description", "Details"],
+            "value_date": ["Value Date", "ValueDate", "Val Date"],
             "debit": ["Debit", "Debit Amount", "Withdrawal", "Dr"],
             "credit": ["Credit", "Credit Amount", "Deposit", "Cr"],
             "balance": ["Balance", "Balances", "Running Balance", "Bal"],
@@ -476,9 +480,14 @@ class CBEPDFAdapter:
         if not txn_date:
             return None
         
-        # Get text fields (actual CBE format: Description, not Narrative/Particulars)
-        description = get_value("description")
+        # Get value date
+        value_date_str = get_value("value_date")
+        value_date = parse_cbe_date(value_date_str) if value_date_str else None
+        
+        # Get text fields (actual CBE format: 8 columns)
+        particulars = get_value("particulars")
         reference = get_value("reference")
+        narrative = get_value("narrative")
         
         # Get amounts
         debit = parse_amount(get_value("debit"))
@@ -491,19 +500,25 @@ class CBEPDFAdapter:
         if debit == 0 and credit == 0:
             return None
         
-        # Skip closing balance rows (they have "CLOSING BALANCE" in description)
-        if description and "CLOSING BALANCE" in description.upper():
+        # Skip closing balance rows
+        combined_text = f"{particulars} {narrative}".upper()
+        if "CLOSING BALANCE" in combined_text or "OPENING BALANCE" in combined_text:
             return None
         
-        # Classify reference code (pass bank name for bank-specific codes)
+        # Classify reference code
+        # FT = Fund Transfer (account to account)
+        # TT = Cash transactions
         ref_code, ref_desc = classify_reference_code(reference, bank="cbe")
-        cheque_num = extract_cheque_number(reference, description)
+        cheque_num = extract_cheque_number(reference, narrative)
+        
+        # Combine particulars and narrative for full description
+        description = f"{particulars} {narrative}".strip()
         
         return CBETransaction(
             date=txn_date,
-            value_date=None,  # CBE doesn't show value date in statements
-            narrative=description,
-            particulars="",
+            value_date=value_date,
+            narrative=narrative,
+            particulars=particulars,
             reference=reference,
             debit=debit,
             credit=credit,

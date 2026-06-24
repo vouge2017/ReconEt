@@ -282,8 +282,8 @@ def format_ethiopian_date(greg_date: date) -> str:
 
 # Default reference codes — can be overridden per bank
 DEFAULT_REFERENCE_CODES = {
-    "FT": "Fund Transfer — intercompany candidate",
-    "TT": "Telegraphic Transfer — FX transaction, check NBE rate",
+    "FT": "Fund Transfer — account to account transfer",
+    "TT": "Cash Transaction — cash deposit/withdrawal",
     "CHQ": "Cheque — link to cheque register",
     "CD": "Cheque Deposit — deposit in transit candidate",
     "CPO": "Cash Payment Order — payroll/vendor payment",

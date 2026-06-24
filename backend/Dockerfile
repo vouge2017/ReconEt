@@ -1,5 +1,14 @@
 FROM python:3.11-slim
 
+# Install system dependencies for PDF parsing and OCR
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    tesseract-ocr-amh \
+    tesseract-ocr-eng \
+    poppler-utils \
+    ghostscript \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt .

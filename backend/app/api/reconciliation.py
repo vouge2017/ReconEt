@@ -1,7 +1,7 @@
 """
-Reconciliation API — Fee-Aware Matching
+Reconciliation API — Fee-Aware Matching with PDF + CSV Support
 
-POST /api/reconciliation/run — Run matching with fee extraction
+POST /api/reconciliation/run — Run matching with fee extraction (PDF or CSV)
 GET  /api/reconciliation/summary — Get fee summary report
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -18,8 +18,26 @@ from app.models import BankTransaction, GLEntry, Match, BankAccount
 from app.engine.matching import MatchingEngine, Transaction, MatchResult
 from app.engine.fee_extractor import FeeExtractor
 from app.engine.explainer import generate_explanation, ExplainabilityEngine
+from app.engine.balance_verifier import BalanceVerifier, VerificationStatus
 
 router = APIRouter(prefix="/api/reconciliation", tags=["reconciliation"])
+
+
+def detect_file_type(filename: str, content: bytes) -> str:
+    """Detect if uploaded file is PDF or CSV"""
+    filename_lower = filename.lower()
+    
+    if filename_lower.endswith('.pdf'):
+        return 'pdf'
+    elif filename_lower.endswith('.csv'):
+        return 'csv'
+    
+    # Check magic bytes
+    if content[:4] == b'%PDF':
+        return 'pdf'
+    
+    # Default to CSV
+    return 'csv'
 
 
 def extract_fees_from_description(description: str, amount: float) -> dict:
@@ -79,6 +97,69 @@ def parse_cbe_csv(content: str) -> List[dict]:
     return transactions
 
 
+def parse_cbe_pdf(content: bytes, filename: str) -> dict:
+    """
+    Parse CBE PDF statement.
+    
+    Returns dict with:
+        - transactions: List of parsed transactions
+        - verification: Balance verification result
+        - account_info: Account metadata
+        - errors: Any parsing errors
+    """
+    from app.adapters.cbe_pdf import CBEPDFAdapter
+    
+    adapter = CBEPDFAdapter()
+    result = adapter.parse(io.BytesIO(content), filename)
+    
+    # Convert to dict format compatible with the matching engine
+    transactions = []
+    for txn in result.transactions:
+        # Determine amount (debit is negative, credit is positive)
+        amount = -txn.debit if txn.debit > 0 else txn.credit
+        
+        transactions.append({
+            "row": txn.row_index,
+            "date": str(txn.date),
+            "reference": txn.reference,
+            "description": txn.narrative or txn.particulars,
+            "amount": amount,
+            "balance": str(txn.balance) if txn.balance else "",
+            "fee_amount": txn.fee_amount,
+            "bank_charge": txn.bank_charge,
+            "gov_tax": txn.gov_tax,
+            "gross_amount": txn.gross_amount,
+            "net_amount": txn.net_amount,
+            "reference_code": txn.reference_code,
+            "transaction_type": txn.transaction_type,
+            "cheque_number": txn.cheque_number,
+            "value_date": str(txn.value_date) if txn.value_date else None,
+        })
+    
+    return {
+        "transactions": transactions,
+        "verification": {
+            "status": result.verification.status.value,
+            "message": result.verification.message,
+            "opening_balance": result.verification.opening_balance,
+            "closing_balance": result.verification.closing_balance,
+            "calculated_closing": result.verification.calculated_closing,
+            "total_credits": result.verification.total_credits,
+            "total_debits": result.verification.total_debits,
+            "difference": result.verification.difference,
+        },
+        "account_info": {
+            "account_type": result.account_type.value,
+            "account_number": result.account_number,
+            "account_name": result.account_name,
+            "statement_period": result.statement_period,
+        },
+        "extraction_details": result.extraction_details,
+        "errors": result.errors,
+        "warnings": result.warnings,
+    }
+
+
 def parse_gl_csv(content: str) -> List[Transaction]:
     """Parse GL CSV export (from Peachtree or generic format)"""
     reader = csv.DictReader(io.StringIO(content))
@@ -86,7 +167,6 @@ def parse_gl_csv(content: str) -> List[Transaction]:
 
     # Try common column name variations
     col_maps = [
-        # Peachtree export format
         {"date": ["Date", "Entry Date", "Transaction Date", "ቀን"],
          "debit": ["Debit", "Debit Amount", "Debit ETB", "ድ nợ"],
          "credit": ["Credit", "Credit Amount", "Credit ETB", "እዳ"],
@@ -98,10 +178,8 @@ def parse_gl_csv(content: str) -> List[Transaction]:
     ]
 
     for i, row in enumerate(reader):
-        # Normalize keys
         normalized = {k.strip().upper(): v.strip() for k, v in row.items()}
 
-        # Extract fields with fallback
         def find_val(keys):
             for k in keys:
                 for nk, nv in normalized.items():
@@ -115,11 +193,7 @@ def parse_gl_csv(content: str) -> List[Transaction]:
         credit_str = find_val(col_map["credit"]).replace(",", "").replace('"', '')
         ref = find_val(col_map["reference"])
         desc = find_val(col_map["description"])
-        acct_code = find_val(col_map["account_code"])
-        acct_name = find_val(col_map["account_name"])
-        journal = find_val(col_map["journal"])
 
-        # Parse amounts
         try:
             debit = float(debit_str) if debit_str else 0.0
         except ValueError:
@@ -132,7 +206,6 @@ def parse_gl_csv(content: str) -> List[Transaction]:
         if debit == 0 and credit == 0:
             continue
 
-        # Parse date
         txn_date = _parse_date(date_str)
         if txn_date is None:
             continue
@@ -169,7 +242,7 @@ def _parse_date(date_str: str) -> Optional[date]:
 
 @router.post("/run")
 async def run_reconciliation(
-    bank_csv: UploadFile = File(...),
+    bank_file: UploadFile = File(...),
     gl_csv: Optional[UploadFile] = None,
     company_id: str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
     db: Session = Depends(get_db)
@@ -177,37 +250,87 @@ async def run_reconciliation(
     """
     Run reconciliation with fee extraction.
     
-    Accepts bank CSV (required) and GL CSV (optional).
-    If no GL CSV provided, uses mock entries for demo.
+    Accepts bank statement as PDF or CSV (auto-detected).
+    Accepts GL CSV (optional). If not provided, uses mock entries.
     
-    Returns matches with fee breakdown and explanations.
+    Returns matches with fee breakdown, explanations, and balance verification.
     """
-    # Parse bank CSV
-    content = await bank_csv.read()
-    content_str = content.decode("utf-8-sig")
+    # Read file content
+    content = await bank_file.read()
+    filename = bank_file.filename or "statement"
     
-    if "ቀን" in content_str or "ክፍያ" in content_str:
-        parsed_txns = parse_cbe_csv(content_str)
+    # Detect file type
+    file_type = detect_file_type(filename, content)
+    
+    pdf_info = None
+    balance_verification = None
+    
+    if file_type == 'pdf':
+        # Parse PDF
+        pdf_result = parse_cbe_pdf(content, filename)
+        
+        if pdf_result["errors"]:
+            # Check if balance verification failed
+            if pdf_result["verification"]["status"] == "failed":
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "balance_verification_failed",
+                        "message": pdf_result["verification"]["message"],
+                        "verification": pdf_result["verification"],
+                        "extraction_errors": pdf_result["errors"],
+                    }
+                )
+        
+        parsed_txns = pdf_result["transactions"]
+        pdf_info = {
+            "account_info": pdf_result["account_info"],
+            "extraction_details": pdf_result["extraction_details"],
+            "warnings": pdf_result["warnings"],
+        }
+        balance_verification = pdf_result["verification"]
+        
     else:
-        parsed_txns = parse_cbe_csv(content_str)
+        # Parse CSV (existing logic)
+        content_str = content.decode("utf-8-sig")
+        
+        if "ቀን" in content_str or "ክፍያ" in content_str:
+            parsed_txns = parse_cbe_csv(content_str)
+        else:
+            parsed_txns = parse_cbe_csv(content_str)
+    
+    if not parsed_txns:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "no_transactions", "message": "No transactions found in file."}
+        )
     
     # Convert to engine Transaction objects
     bank_transactions = []
     for txn in parsed_txns:
-        date_parts = txn["date"].split("/")
-        txn_date = date(int(date_parts[2]), int(date_parts[1]), int(date_parts[0]))
+        # Parse date
+        if "/" in str(txn["date"]):
+            date_parts = str(txn["date"]).split("/")
+            txn_date = date(int(date_parts[2]), int(date_parts[1]), int(date_parts[0]))
+        elif "-" in str(txn["date"]):
+            txn_date = datetime.strptime(str(txn["date"]), "%Y-%m-%d").date()
+        else:
+            txn_date = _parse_date(str(txn["date"]))
+        
+        if txn_date is None:
+            continue
         
         bank_transactions.append(Transaction(
             id=f"bank-{txn['row']}",
             date=txn_date,
             amount=txn["amount"],
-            reference=txn["reference"],
-            description=txn["description"],
-            fee_amount=txn["fee_amount"],
-            bank_charge=txn["bank_charge"],
-            gov_tax=txn["gov_tax"],
-            gross_amount=txn["gross_amount"],
-            net_amount=txn["net_amount"]
+            reference=txn.get("reference", ""),
+            description=txn.get("description", ""),
+            fee_amount=txn.get("fee_amount", 0),
+            bank_charge=txn.get("bank_charge", 0),
+            gov_tax=txn.get("gov_tax", 0),
+            gross_amount=txn.get("gross_amount", 0),
+            net_amount=txn.get("net_amount", 0),
         ))
     
     # Parse GL CSV or use mock
@@ -249,11 +372,9 @@ async def run_reconciliation(
         gl_id = match.gl_entry_ids[0] if match.gl_entry_ids else None
         gl = next((t for t in gl_entries if t.id == gl_id), None) if gl_id else None
         
-        # Build txn dicts for explainer
         bt_dict = {"id": bt.id, "date": str(bt.date), "amount": bt.amount, "reference": bt.reference, "description": bt.description} if bt else {}
         gl_dict = {"id": gl.id, "date": str(gl.date), "amount": gl.amount, "reference": gl.reference, "description": gl.description} if gl else None
         
-        # Generate rich explanation
         rich_explanation = generate_explanation(
             match_type=match.match_type,
             confidence=match.confidence,
@@ -263,7 +384,6 @@ async def run_reconciliation(
             fee_breakdown=match.fee_breakdown,
         )
         
-        # Detect anomalies
         anomalies = explainer.detect_anomalies(bt_dict, all_bank_dicts)
         rich_explanation["anomaly_flags"] = anomalies
         
@@ -295,7 +415,7 @@ async def run_reconciliation(
     total_bank_charges = sum(t.bank_charge for t in bank_transactions)
     total_gov_tax = sum(t.gov_tax for t in bank_transactions)
     
-    return {
+    response = {
         "summary": {
             "total_bank_transactions": total_bank,
             "total_matched": total_matched,
@@ -308,15 +428,26 @@ async def run_reconciliation(
                 "transactions_with_fees": sum(1 for t in bank_transactions if t.fee_amount > 0)
             }
         },
-        "matches": results
+        "matches": results,
+        "source": {
+            "file_type": file_type,
+            "filename": filename,
+        }
     }
+    
+    # Add PDF-specific info
+    if pdf_info:
+        response["pdf_info"] = pdf_info
+    if balance_verification:
+        response["balance_verification"] = balance_verification
+    
+    return response
 
 
 @router.get("/summary/{company_id}")
 async def get_fee_summary(company_id: str, db: Session = Depends(get_db)):
     """Get fee summary report for a company"""
     
-    # Get all transactions for company
     txns = db.query(BankTransaction).join(BankAccount).filter(
         BankAccount.company_id == company_id
     ).all()
@@ -325,7 +456,6 @@ async def get_fee_summary(company_id: str, db: Session = Depends(get_db)):
     total_charges = sum(t.bank_charge or 0 for t in txns)
     total_tax = sum(t.gov_tax or 0 for t in txns)
     
-    # Group by fee_type
     by_type = {}
     for t in txns:
         fee_type = t.fee_type or "none"

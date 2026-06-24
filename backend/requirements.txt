@@ -13,6 +13,5 @@ pytesseract==0.3.10
 pdf2image==1.17.0
 Pillow==10.2.0
 
-# OCR for scanned PDFs (optional)
-# paddleocr==2.7.0
-# paddlepaddle==2.6.0
+# Ethiopian calendar
+py-ethiopian-date-converter==0.1.1

@@ -80,8 +80,15 @@ class CMapPDFExtractor:
         if isinstance(pdf_source, bytes):
             data = pdf_source
         elif isinstance(pdf_source, str):
-            with open(pdf_source, 'rb') as f:
-                data = f.read()
+            try:
+                with open(pdf_source, 'rb') as f:
+                    data = f.read()
+            except (FileNotFoundError, PermissionError, OSError) as e:
+                return CMapExtractionResult(
+                    pages=[], full_text="", fonts_decoded=0,
+                    total_pages=0, success=False,
+                    errors=[f"Cannot read file: {str(e)}"]
+                )
         elif hasattr(pdf_source, 'read'):
             data = pdf_source.read()
             if hasattr(pdf_source, 'seek'):

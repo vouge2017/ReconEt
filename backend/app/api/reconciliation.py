@@ -485,3 +485,120 @@ async def get_fee_summary(company_id: str, db: Session = Depends(get_db)):
         },
         "by_fee_type": by_type
     }
+
+
+@router.get("/export/{run_id}")
+async def export_reconciliation_excel(
+    run_id: str,
+    company_name: str = "",
+    account_number: str = "",
+    period: str = "",
+    db: Session = Depends(get_db)
+):
+    """
+    Export reconciliation results to Excel.
+    
+    Returns .xlsx file with:
+    - Summary statistics
+    - All bank transactions (with fee breakdown)
+    - Matched transactions
+    - Unmatched transactions
+    - Exception categories
+    """
+    from fastapi.responses import StreamingResponse
+    from app.engine.excel_exporter import ExcelExporter, ExportConfig
+    
+    # Get transactions for this run
+    txns = db.query(BankTransaction).filter(
+        BankTransaction.upload_batch_id == run_id
+    ).all()
+    
+    if not txns:
+        raise HTTPException(status_code=404, detail="No transactions found for this run")
+    
+    # Get matches
+    matches = db.query(Match).filter(
+        Match.company_id == run_id  # simplified
+    ).all()
+    
+    # Convert to export format
+    from dataclasses import dataclass
+    from typing import Optional
+    
+    @dataclass
+    class ExportTransaction:
+        row_index: int = 0
+        date: str = ""
+        value_date: str = ""
+        particulars: str = ""
+        reference: str = ""
+        narrative: str = ""
+        debit: float = 0.0
+        credit: float = 0.0
+        balance: float = 0.0
+        fee_amount: float = 0.0
+        bank_charge: float = 0.0
+        gov_tax: float = 0.0
+        reference_code: str = ""
+        transaction_type: str = ""
+        cheque_number: str = ""
+        is_matched: bool = False
+        gross_amount: float = 0.0
+        net_amount: float = 0.0
+    
+    export_txns = []
+    for i, t in enumerate(txns, 1):
+        export_txns.append(ExportTransaction(
+            row_index=i,
+            date=str(t.transaction_date or ""),
+            value_date=str(t.value_date or ""),
+            particulars=t.description or "",
+            reference=t.reference or "",
+            narrative=t.description or "",
+            debit=float(t.amount or 0) if (t.amount or 0) < 0 else 0,
+            credit=float(t.amount or 0) if (t.amount or 0) > 0 else 0,
+            balance=float(t.balance_after or 0),
+            fee_amount=float(t.fee_amount or 0),
+            bank_charge=float(t.bank_charge or 0),
+            gov_tax=float(t.gov_tax or 0),
+            reference_code="",
+            transaction_type="",
+            cheque_number="",
+            is_matched=bool(t.is_matched),
+            gross_amount=float(t.gross_amount or 0),
+            net_amount=float(t.net_amount or 0),
+        ))
+    
+    config = ExportConfig(
+        company_name=company_name or "Ethiopian Company",
+        account_number=account_number or "N/A",
+        period=period or "N/A",
+    )
+    
+    exporter = ExcelExporter()
+    buffer = exporter.export(
+        transactions=export_txns,
+        config=config,
+    )
+    
+    filename = f"reconciliation_{run_id[:8]}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@router.post("/export/pdf")
+async def export_reconciliation_pdf(
+    run_id: str,
+    company_name: str = "",
+    account_number: str = "",
+    period: str = "",
+):
+    """
+    Export reconciliation results to PDF report.
+    (Placeholder — PDF generation coming in Phase 3)
+    """
+    return {"status": "not_implemented", "message": "PDF export coming in Phase 3"}

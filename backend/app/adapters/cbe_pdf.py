@@ -13,6 +13,10 @@ This adapter:
 3. Handles Ethiopian calendar dates
 4. Extracts reference codes (FT, CHQ, CD, CPO, ECS, PKR, VPCH)
 5. Verifies balance before returning results
+
+Extraction strategy (CBE-specific):
+- PRIMARY: CMap-based extraction (for DEVEXP+ encoded PDFs)
+- FALLBACK: pdfplumber / Tesseract OCR (for scanned or standard PDFs)
 """
 
 import re
@@ -21,11 +25,12 @@ from typing import List, Optional, Dict, Tuple
 from datetime import date
 from enum import Enum
 
-from app.engine.pdf_extractor import PDFExtractor, PDFExtractionResult, ExtractedTable
+from app.engine.pdf_extractor import PDFExtractor, PDFExtractionResult, ExtractedPage, ExtractedTable, ExtractionMethod, PDFType
+from app.engine.cmap_extractor import CMapPDFExtractor, CMapExtractionResult
 from app.engine.balance_verifier import BalanceVerifier, Transaction, VerificationResult
 from app.engine.ethiopian_calendar import (
     parse_cbe_date, classify_reference_code, extract_cheque_number,
-    REFERENCE_CODES
+    BANK_REFERENCE_CODES
 )
 from app.engine.fee_extractor import FeeExtractor
 
@@ -140,7 +145,7 @@ class CBEPDFAdapter:
         # Statement type detection
         "savings_hint": r'(?:Saving|Savings)\s*Account',
         "current_hint": r'(?:Current)\s*Account',
-        "overdraft_hint": r'(?:Overdraft|OD)',
+        "overdraft_hint": r'(?:Overdraft|\bOD\b)',
     }
     
     # Column layouts for each account type
@@ -171,9 +176,52 @@ class CBEPDFAdapter:
     
     def __init__(self):
         self.pdf_extractor = PDFExtractor()
+        self.cmap_extractor = CMapPDFExtractor()
         self.balance_verifier = BalanceVerifier()
         self.fee_extractor = FeeExtractor()
     
+    def _extract_with_cmap_fallback(
+        self, pdf_source, filename: str = ""
+    ) -> PDFExtractionResult:
+        """
+        Extract text from CBE PDF using CMap decoding (primary),
+        falling back to pdfplumber/Tesseract (for other banks or scanned PDFs).
+        
+        Returns:
+            PDFExtractionResult compatible with existing parse() logic
+        """
+        # --- PRIMARY: CMap extraction ---
+        try:
+            cmap_result = self.cmap_extractor.extract(pdf_source)
+            
+            if cmap_result.success and cmap_result.full_text.strip():
+                # Convert CMap result to PDFExtractionResult format
+                pages = []
+                for cmap_page in cmap_result.pages:
+                    pages.append(ExtractedPage(
+                        page_number=cmap_page.page_number,
+                        text=cmap_page.full_text,
+                        tables=[]  # CMap gives raw text, not tables
+                    ))
+                
+                return PDFExtractionResult(
+                    pages=pages,
+                    total_pages=cmap_result.total_pages,
+                    pdf_type=PDFType.TEXT_BASED,
+                    extraction_method=ExtractionMethod.PDFPLUMBER,  # reuse enum
+                    full_text=cmap_result.full_text,
+                    metadata={
+                        "cmap_fonts_decoded": cmap_result.fonts_decoded,
+                        "extraction_path": "cmap"
+                    }
+                )
+        except Exception as e:
+            # CMap failed — fall through to standard extractor
+            pass
+        
+        # --- FALLBACK: pdfplumber / Tesseract OCR ---
+        return self.pdf_extractor.extract(pdf_source, filename)
+
     def parse(self, pdf_source, filename: str = "") -> CBEParseResult:
         """
         Parse a CBE PDF statement.
@@ -188,8 +236,10 @@ class CBEPDFAdapter:
         errors = []
         warnings = []
         
-        # Step 1: Extract text and tables from PDF
-        extraction = self.pdf_extractor.extract(pdf_source, filename)
+        # Step 1: Extract text from PDF
+        # Try CMap extraction first (handles CBE's DEVEXP+ encoded PDFs)
+        # Falls back to pdfplumber/Tesseract if CMap fails
+        extraction = self._extract_with_cmap_fallback(pdf_source, filename)
         
         if extraction.extraction_method.value == "failed":
             return CBEParseResult(

@@ -1,155 +1,168 @@
 # ReconET — Session Handoff
 
-**Date:** June 24, 2026 (End of Day)
-**Previous Session:** Built core platform, PDF adapter, explainability engine
-**This Session:** Real CBE data analysis, security fixes, fuzzy matching, feedback incorporation
+**Date:** June 25, 2026  
+**Previous Session:** Built core platform, PDF adapter, explainability engine  
+**This Session:** Real CBE data analysis, CMap extractor, Excel export, test suite, market research
 
 ---
 
 ## What Was Done Today
 
-### 1. Analyzed Real CBE Statement
-- User provided actual CBE PDF statement (18 pages, scanned)
-- Confirmed 8-column format: Date | Particulars | Reference | Narrative | Value Date | Debit | Credit | Balance
-- Reference codes: FT = Fund Transfer, TT = Cash Transaction
-- PDF is image-based (needs OCR, not text extraction)
+### 1. Analyzed 3 Real CBE Bank Statements
 
-### 2. Incorporated External Feedback
+| Statement | Account Type | Pages | Period |
+|---|---|---|---|
+| Nael Hailemariam | Savings | 4 | Jan–Apr 2022 |
+| Ahimed Kedir Fright Transport | Current (Business) | 8 | Jan 2021–Apr 2022 |
+| Sara Birmeka Mohammed | Savings | 6 | Mar–May 2023 |
 
-**From Kimi AI:**
-- Reference codes configurable per bank ✅
-- Fiscal year configurable (Ethiopian vs Gregorian) ✅
-- Fee patterns are 4 not 1 ✅
-- 3 banks for MVP (CBE, Dashen, Awash) ✅
-- NYLOS integration potential ✅
+**Key Discovery:** PDFs are NOT scanned images. They use custom font encoding (DEVEXP+) with CMap-based text. No OCR needed for CBE.
 
-**From ChatGPT:**
-- Pain > Parsing (already addressed via Explainability Engine)
-- Competitors are indirect (Excel, Sage, ERPNext)
-- Validate "PDF only" with corporate portal question
+### 2. Built CMap-Based PDF Extractor
 
-### 3. Open Source Tools Researched & Integrated
+- `backend/app/engine/cmap_extractor.py` — decodes CBE's DEVEXP+ font encoding
+- Pure Python + zlib, no external dependencies
+- Successfully extracts all 6 fonts, all pages, full text
+- Handles both `\n` and `\r\n` line endings
+- Graceful error handling for missing files
 
-| Tool | Status | Use |
-|------|--------|-----|
-| py-ethiopian-date-converter | ✅ Integrated | Ethiopian ↔ Gregorian calendar |
-| Splink | ✅ Integrated | Fuzzy transaction matching |
-| CBE tariff database | ✅ Built | Fee pattern 4 (deducted but not itemized) |
-| NYLOS | 📋 Researched | Ethiopian ERP, potential GL source |
-| Indian-Bank-Statements (HuggingFace) | 📋 Researched | Reference for synthetic data |
+### 3. Updated CBE PDF Adapter
 
-### 4. Security Quick Wins
+- `backend/app/adapters/cbe_pdf.py` — CMap is now PRIMARY extraction method
+- pdfplumber/Tesseract OCR stays as FALLBACK for other banks
+- Fixed pre-existing import error (`REFERENCE_CODES` → `BANK_REFERENCE_CODES`)
+- Fixed overdraft false positive (`OD` → `\bOD\b`)
 
-| Fix | Status |
-|-----|--------|
-| CORS restricted to localhost | ✅ Done |
-| File upload limit (50MB) | ✅ Done |
-| Basic logging | ✅ Done |
-| JWT authentication | 📋 Week 2 |
-| Rate limiting | 📋 Week 2 |
+### 4. Built Excel Export Engine
 
-### 5. Code Fixes
+- `backend/app/engine/excel_exporter.py` — professional .xlsx output
+- 6 sheets: Summary, Matched, Bank Transactions, Unmatched Bank, Unmatched GL, Exceptions
+- Styled headers, currency formatting, alternating row colors
+- Fee breakdown columns (bank charge, gov tax, WHT, gross, net)
+- Exception categorization with suggested actions
+- API endpoint: `GET /api/reconciliation/export/{run_id}`
 
-- CBE PDF adapter: Updated to 8-column format
-- Fee extractor: Tariff DB wired as fallback (pattern 4)
-- Fee extractor: Fixed double-counting bug
-- Balance verifier: Now rejects uploads when verification fails
-- Matching engine: Added Phase 3 fuzzy matching
-- PDF extractor: English-primary OCR (Amharic fallback)
-- Reference codes: FT, TT definitions corrected
+### 5. Built Test Suite (38 tests, all passing)
+
+| Suite | Tests | Coverage |
+|---|---|---|
+| CMap Extractor | 13 | Real PDFs, page counts, font decoding, edge cases |
+| Fee Extractor | 14 | All 4 patterns, confidence scores, edge cases |
+| Excel Exporter | 11 | Export, config, data integrity |
+
+### 6. Market Research & Expert Audit
+
+- Ethiopian market ecosystem (NBE, AABE, ERCA, banks)
+- Lessons from India, Kenya, UAE, UK, South Africa
+- Expert audit across 6 domains
+- Critical gaps identified
+- Competitive landscape (no direct competitor in Ethiopia)
+
+### 7. Accountant Interview Questions
+
+- 29 questions across 7 sections
+- Focus on fee handling (our differentiator)
+- Removed willingness-to-pay section per user request
+
+### 8. Execution Plan
+
+- Phase 1 (Week 1-2): Foundation — Excel export ✅, Tests ✅, Auth ⬜, Logging ✅
+- Phase 2 (Week 3-4): Product — GL mapping, WHT, exceptions, period lock, dashboard
+- Phase 3 (Week 5-6): Pilot — Multi-bank, reports, roles, onboarding
 
 ---
 
-## Files Modified Today
+## Files Modified/Created Today
 
 | File | Change |
-|------|--------|
-| `backend/app/adapters/cbe_pdf.py` | 8-column format, reference codes |
-| `backend/app/engine/fee_extractor.py` | Tariff DB fallback, bug fixes |
-| `backend/app/engine/fuzzy_matcher.py` | NEW — Splink integration |
-| `backend/app/engine/matching.py` | Phase 3 fuzzy matching |
-| `backend/app/engine/pdf_extractor.py` | English-primary OCR |
-| `backend/app/engine/ethiopian_calendar.py` | Library integration, configurable codes |
-| `backend/app/engine/tariff_db.py` | NEW — CBE fee tariff database |
-| `backend/app/main.py` | CORS fix, logging |
-| `backend/app/api/reconciliation.py` | File size limits |
-| `backend/requirements.txt` | Added splink, py-ethiopian-date-converter |
-| `data/real_cbe_samples/` | NEW — Real CBE PDF + images |
+|---|---|
+| `backend/app/engine/cmap_extractor.py` | NEW — CMap PDF text extractor |
+| `backend/app/engine/excel_exporter.py` | NEW — Excel export engine |
+| `backend/app/adapters/cbe_pdf.py` | Updated — CMap as primary, OCR fallback |
+| `backend/app/api/reconciliation.py` | Updated — Excel export endpoint |
+| `backend/tests/test_cmap_extractor.py` | NEW — 13 tests |
+| `backend/tests/test_fee_extractor.py` | NEW — 14 tests |
+| `backend/tests/test_excel_exporter.py` | NEW — 11 tests |
+| `data/real_cbe_samples/*.pdf` | NEW — 3 real CBE statements |
+| `data/real_cbe_samples/ANALYSIS.md` | NEW — Statement analysis |
+| `ACCOUNTANT_QUESTIONS.md` | NEW — Interview questions |
+| `MARKET_RESEARCH_AND_AUDIT.md` | NEW — Market research |
+| `EXECUTION_PLAN.md` | NEW — 3-phase plan |
 
 ---
 
 ## Project Status
 
 ### ✅ Built (Ready for Testing)
-- CBE PDF adapter (8-column format)
+- CMap PDF extractor (DEVEXP+ font decoding)
+- CBE PDF adapter (8-column format, CMap primary, OCR fallback)
 - Balance verification (hard gate)
-- Fee extraction (4 patterns)
+- Fee extraction (4 patterns + tariff DB)
 - Matching engine (exact + date-shifted + fuzzy)
 - Explainability engine (IFRS references, Amharic)
 - Cheque tracking (API + UI)
 - Ethiopian calendar (library + fallback)
-- Security quick wins (CORS, file limits, logging)
+- Excel export (6 sheets, professional styling)
+- Test suite (38 tests, all passing)
+- Security basics (CORS, file limits, logging)
 
-### 📋 TODO (After Friday Validation)
-- JWT authentication
-- Rate limiting
-- Input validation
-- Alembic migrations
-- Excel export
-- Dashen/Awash adapters
-- SOC 2 (if enterprise customers ask)
+### 🔴 Critical Gaps (Phase 1 — Week 1-2)
+- [ ] JWT authentication — can't deploy without it
+- [x] Excel export — DONE
+- [x] Automated tests — DONE (38 tests)
+- [x] Error handling — DONE
+
+### 🟡 Should-Fix (Phase 2 — Week 3-4)
+- [ ] GL account mapping — connect fees to GL accounts
+- [ ] WHT tracking — 2% withholding tax on fees
+- [ ] Exception reporting — categorize unmatched transactions
+- [ ] Period lock — prevent backdating
+- [ ] Executive dashboard — CFO one-glance view
+
+### 🟢 Nice-to-Have (Phase 3 — Week 5-6)
+- [ ] Dashen/Awash bank adapters
+- [ ] Reconciliation PDF report
+- [ ] User roles (clerk/CFO/auditor)
+- [ ] Onboarding wizard
 
 ---
 
-## Friday Test Plan
+## Next Tasks (Priority Order)
 
-| # | Test | Expected |
-|---|------|----------|
-| 1 | Upload real CBE PDF | Parse without errors |
-| 2 | Balance verification | Pass (opening + credits - debits = closing) |
-| 3 | Fee extraction | Extract fees from transactions |
-| 4 | Matching engine | Match bank txns to GL entries |
-| 5 | Explainability | Show IFRS references and explanations |
-| 6 | Cheque detection | Identify CHQ transactions |
+### Immediate (This Week)
+1. **JWT Authentication** — register, login, token, roles
+2. **Run accountant interviews** — use ACCOUNTANT_QUESTIONS.md
+3. **Get Dashen/Awash statement samples**
 
----
+### Next Week
+4. **GL account mapping** — fee_type → GL account code
+5. **WHT tracking** — detect 2% WHT in bank fees
+6. **Exception reporting** — categorize unmatched transactions
 
-## Customer Discovery Questions (For Friday)
-
-| # | Question |
-|---|----------|
-| 1 | Which CBE portal do you use? Corporate or retail? |
-| 2 | Does corporate portal have Excel/CSV export? |
-| 3 | Do you use Ethiopian or Gregorian fiscal year? |
-| 4 | How are fees shown? Embedded, separate line, separate row, or not itemized? |
-| 5 | Do you use NYLOS or another ERP? |
-| 6 | Can your ERP export GL data? What format? |
-| 7 | How many banks do you reconcile? Which ones? |
-| 8 | What was your hardest reconciliation this year? |
-| 9 | If a tool cut this time by 80%, who would approve it? |
-| 10 | Can I watch you reconcile next month-end? |
+### Week After
+7. **Period lock** — open/locked status per month
+8. **Executive dashboard** — charts + summary stats
+9. **Multi-bank support** — Dashen, Awash adapters
 
 ---
 
 ## Key Decisions Made
 
-1. **8 columns, not 6** — CBE format confirmed by user
-2. **FT = Fund Transfer, TT = Cash** — Reference codes clarified
-3. **English primary** — Most statements are English, Amharic is edge case
-4. **3 banks for MVP** — CBE, Dashen, Awash (not all 32)
-5. **Fiscal year configurable** — Gregorian default, Ethiopian option
-6. **SOC 2 later** — Not needed until enterprise customers ask
-7. **Fuzzy matching via Splink** — For hard cases exact matching misses
+1. **CMap over OCR** — CBE PDFs are text-based with custom fonts, not scanned
+2. **Excel is P0** — Accountants live in Excel, no export = no adoption
+3. **3 phases, 30 days** — Foundation → Product → Pilot
+4. **No willingness-to-pay questions** — removed per user request
+5. **Keep Tesseract** — other banks may need OCR
 
 ---
 
-## Critical Context for Tomorrow
+## Critical Context for Next Session
 
-- **Real CBE PDF is scanned** — Needs OCR (Tesseract), not text extraction
-- **8-column format** — Date | Particulars | Reference | Narrative | Value Date | Debit | Credit | Balance
-- **Balance verification is a hard gate** — Reject if doesn't match
-- **Fee extraction has 4 patterns** — Embedded, separate line, separate row, tariff estimate
-- **Friday is validation, not launch** — Pass = proceed, fail = fix
+- **CBE PDFs use DEVEXP+ fonts** — CMap decoding, not OCR
+- **8-column format confirmed** — Date, Particulars, Reference, Narrative, Value Date, Debit, Credit, Balance
+- **Fee patterns embedded** — 1,002 = 1,000 + 2; 2,004 = 2,000 + 4
+- **38 tests passing** — run `python3 -m pytest backend/tests/ -v`
+- **6 commits today** — all pushed to GitHub
 
 ---
 
@@ -158,8 +171,9 @@
 All code pushed to `https://github.com/vouge2017/ReconEt.git`
 
 Latest commits:
-- `fc3604f` — Quick security wins (CORS, file limits, logging)
-- `e58b1ba` — Correct CBE format to 8 columns
-- `2cd1766` — Update CBE adapter to match REAL statement format
-- `3d5b9af` — Add fuzzy matching, English-primary OCR
-- `803389b` — Wire tariff DB, fix fee patterns
+- `d8d38ac` — Phase 1: Excel export + test suite + error handling
+- `47dec32` — Add execution plan — 3 phases, 16 features, 30 days
+- `19d4d01` — Add market research, competitive landscape & expert audit
+- `13557b3` — Remove willingness-to-pay section from accountant questions
+- `cfd136d` — Add accountant interview questions for customer discovery
+- `523c960` — Add CMap-based PDF extractor for CBE statements

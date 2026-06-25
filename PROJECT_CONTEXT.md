@@ -8,7 +8,7 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 
 **The Solution:** ReconET extracts fees from transaction descriptions, then uses three matching strategies (NET, GROSS, SPLIT) to achieve >90% match rates.
 
-**Critical Update (June 24, 2026):** CBE only provides PDF statements (not CSV). PDF is now the primary ingestion path. Real CBE statement analyzed — 8-column format confirmed.
+**Critical Update (June 25, 2026):** CBE PDFs are text-based with custom fonts (DEVEXP+), not scanned images. CMap-based extraction replaces OCR as primary method. Real CBE statements analyzed — 8-column format confirmed across savings and current accounts.
 
 ---
 
@@ -18,13 +18,18 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 ┌─────────────────────────────────────────────────────────────┐
 │  Frontend (React + Vite + Tailwind)                         │
 │  ├── Reconciliation page (upload PDF/CSV → view matches)    │
-│  └── Cheques page (track outstanding/stale cheques)         │
+│  ├── Cheques page (track outstanding/stale cheques)         │
+│  ├── Dashboard page (executive summary)                     │
+│  └── Excel export (download .xlsx reports)                  │
 ├─────────────────────────────────────────────────────────────┤
 │  Backend (FastAPI + SQLAlchemy)                              │
 │  ├── /api/reconciliation/run — Upload PDF/CSV, get matches  │
+│  ├── /api/reconciliation/export/{id} — Export to Excel      │
 │  ├── /api/cheques/ — CRUD for cheque tracking               │
-│  ├── adapters/cbe_pdf.py — CBE PDF parser (8 columns)       │
-│  ├── engine/pdf_extractor.py — PDF extraction + OCR         │
+│  ├── adapters/cbe_pdf.py — CBE PDF parser (CMap primary)    │
+│  ├── engine/cmap_extractor.py — CMap text extraction        │
+│  ├── engine/pdf_extractor.py — PDF extraction + OCR (fallback│
+│  ├── engine/excel_exporter.py — Excel export engine         │
 │  ├── engine/balance_verifier.py — Pre-upload balance check  │
 │  ├── engine/ethiopian_calendar.py — Ge'ez → Gregorian       │
 │  ├── engine/fee_extractor.py — 4 fee patterns + tariff DB   │
@@ -39,6 +44,11 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 │  ├── matches (with fee_breakdown JSON)                      │
 │  ├── cheques                                                │
 │  └── audit_trail                                            │
+├─────────────────────────────────────────────────────────────┤
+│  Tests (pytest — 38 tests, all passing)                     │
+│  ├── test_cmap_extractor.py — 13 tests                      │
+│  ├── test_fee_extractor.py — 14 tests                       │
+│  └── test_excel_exporter.py — 11 tests                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,7 +56,7 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 
 ## CBE Statement Format (Real Data — June 2026)
 
-**8 Columns:**
+**8 Columns (confirmed across 3 real statements):**
 
 | # | Column | Example |
 |---|--------|---------|
@@ -59,6 +69,10 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 | 7 | Credit | - |
 | 8 | Balance | 9,000.00 |
 
+**Account Types Confirmed:**
+- Saving Account (Nael Hailemariam, Sara Birmeka)
+- Current Account (Ahimed Kedir Fright Transport)
+
 **Reference Codes:**
 - **FT** = Fund Transfer (account to account)
 - **TT** = Cash Transaction (cash deposit/withdrawal)
@@ -69,7 +83,7 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 - **PKR** = Payment to Supplier
 - **VPCH** = Voucher Payment
 
-**Important:** PDF is scanned (image-based). Needs OCR (Tesseract) for extraction.
+**Important:** PDFs use custom font encoding (DEVEXP+), not scanned images. CMap-based text extraction works — no OCR needed for CBE.
 
 ---
 
@@ -81,6 +95,15 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 | 2. Separate line item | `SERVICE CHARGE 25` | ✅ Built |
 | 3. Separate row in table | Fee as own transaction row | ✅ Built |
 | 4. Deducted but not itemized | Tariff database lookup | ✅ Built |
+
+**Fee Patterns Found in Real Statements:**
+- 1,002 = 1,000 + 2 fee
+- 2,004 = 2,000 + 4 fee
+- 1,005 = 1,000 + 5 fee
+- 2,010 = 2,000 + 10 fee
+- 502.50 = 500 + 2.50 fee
+- 4,008 = 4,000 + 8 fee
+- 6,030 = 6,000 + 30 fee
 
 ---
 
@@ -98,7 +121,7 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 
 | Bank | Adapter | Status |
 |------|---------|--------|
-| CBE | `cbe_pdf.py` | ✅ Built |
+| CBE | `cbe_pdf.py` | ✅ Built (CMap primary, OCR fallback) |
 | Dashen | `dashen_pdf.py` | 📋 Next |
 | Awash | `awash_pdf.py` | 📋 Next |
 
@@ -108,7 +131,9 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 
 | File | Purpose |
 |------|---------|
-| `backend/app/adapters/cbe_pdf.py` | CBE PDF parser (8 columns) |
+| `backend/app/engine/cmap_extractor.py` | CMap PDF text extractor (DEVEXP+ fonts) |
+| `backend/app/engine/excel_exporter.py` | Excel export engine (6 sheets) |
+| `backend/app/adapters/cbe_pdf.py` | CBE PDF parser (CMap primary, OCR fallback) |
 | `backend/app/engine/fee_extractor.py` | 4 fee patterns + tariff DB |
 | `backend/app/engine/matching.py` | 3-phase matching engine |
 | `backend/app/engine/fuzzy_matcher.py` | Splink fuzzy matching |
@@ -116,13 +141,16 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 | `backend/app/engine/tariff_db.py` | CBE fee tariff database |
 | `backend/app/engine/ethiopian_calendar.py` | Ge'ez → Gregorian |
 | `backend/app/engine/balance_verifier.py` | Pre-upload balance check |
-| `backend/app/engine/pdf_extractor.py` | PDF extraction + OCR |
+| `backend/app/engine/pdf_extractor.py` | PDF extraction + OCR (fallback) |
 | `backend/app/main.py` | FastAPI app (CORS, logging) |
-| `backend/app/api/reconciliation.py` | Reconciliation API |
+| `backend/app/api/reconciliation.py` | Reconciliation + Excel export API |
 | `backend/app/api/cheques.py` | Cheque tracking API |
-| `frontend/src/pages/Reconciliation.tsx` | Reconciliation UI |
-| `frontend/src/pages/Cheques.tsx` | Cheques UI |
-| `data/real_cbe_samples/` | Real CBE PDF + images |
+| `backend/tests/` | Test suite (38 tests) |
+| `data/real_cbe_samples/` | Real CBE PDF statements |
+| `ACCOUNTANT_QUESTIONS.md` | Interview questions |
+| `MARKET_RESEARCH_AND_AUDIT.md` | Market research & expert audit |
+| `EXECUTION_PLAN.md` | 3-phase execution plan |
+| `SESSION_HANDOFF.md` | This file |
 
 ---
 
@@ -132,13 +160,16 @@ ReconET is an Ethiopian treasury reconciliation platform that matches bank trans
 # Start everything
 docker-compose up -d
 
+# Run tests
+python3 -m pytest backend/tests/ -v
+
 # Test PDF upload
 curl -X POST http://localhost:8000/api/reconciliation/run \
-  -F "bank_file=@data/real_cbe_samples/cbe_statement.pdf"
+  -F "bank_file=@data/real_cbe_samples/Nael_Hailemariam.pdf"
 
-# Test CSV upload
-curl -X POST http://localhost:8000/api/reconciliation/run \
-  -F "bank_file=@data/sample_cbe_with_fees.csv"
+# Export to Excel
+curl -X GET http://localhost:8000/api/reconciliation/export/{run_id} \
+  -o reconciliation.xlsx
 
 # Open frontend
 open http://localhost:5173
@@ -146,27 +177,40 @@ open http://localhost:5173
 
 ---
 
-## Current Status (June 24, 2026)
+## Current Status (June 25, 2026)
 
 ### ✅ Built (Ready for Testing)
-- CBE PDF adapter (8-column format)
+- CMap PDF extractor (DEVEXP+ font decoding)
+- CBE PDF adapter (8-column format, CMap primary, OCR fallback)
 - Balance verification (hard gate)
-- Fee extraction (4 patterns)
+- Fee extraction (4 patterns + tariff DB)
 - Matching engine (3 phases)
-- Explainability engine (IFRS references)
+- Explainability engine (IFRS references, Amharic)
 - Cheque tracking (API + UI)
 - Ethiopian calendar (library + fallback)
 - Fuzzy matching (Splink)
-- Security quick wins (CORS, file limits, logging)
+- Excel export (6 sheets, professional styling)
+- Test suite (38 tests, all passing)
+- Security basics (CORS, file limits, logging)
 
-### 📋 TODO (After Friday)
-- JWT authentication
-- Rate limiting
-- Input validation
-- Alembic migrations
-- Excel export
-- Dashen/Awash adapters
-- SOC 2 (if enterprise customers ask)
+### 🔴 Critical Gaps (Phase 1 — Week 1-2)
+- [ ] JWT authentication
+- [x] Excel export — DONE
+- [x] Automated tests — DONE (38 tests)
+- [x] Error handling — DONE
+
+### 🟡 Should-Fix (Phase 2 — Week 3-4)
+- [ ] GL account mapping
+- [ ] WHT tracking
+- [ ] Exception reporting
+- [ ] Period lock
+- [ ] Executive dashboard
+
+### 🟢 Nice-to-Have (Phase 3 — Week 5-6)
+- [ ] Dashen/Awash adapters
+- [ ] Reconciliation PDF report
+- [ ] User roles (clerk/CFO/auditor)
+- [ ] Onboarding wizard
 
 ---
 
@@ -179,3 +223,5 @@ open http://localhost:5173
 | Fee extraction | Extracts fees | Misses fees |
 | Matching | Matches transactions | No matches |
 | Explainability | Shows IFRS refs | No explanations |
+| Excel export | Downloads .xlsx | Fails or empty |
+| Tests | 38/38 pass | Any failure |

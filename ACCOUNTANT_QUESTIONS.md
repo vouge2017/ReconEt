@@ -102,32 +102,15 @@
 
 ---
 
-## 🎯 Section 6: Value & Willingness to Pay
-
-**25. If a tool could cut your reconciliation time by 80%, what would that be worth to you?**
-- _Goal: Validate pricing / willingness to pay_
-
-**26. Who would approve purchasing such a tool? You? Your CFO? IT?**
-- _Goal: Know the decision maker_
-
-**27. Would you be willing to pilot this tool with your next month-end close?**
-- _Goal: Get a pilot commitment_
-
-**28. Can I watch you reconcile next month-end? (Screen share or in person)**
-- _Goal: Get observational access for UX design_
-
----
-
-## 🚀 Section 7: Quick Validation (Yes/No Rapid Fire)
+## 🎯 Section 6: Quick Validation (Yes/No Rapid Fire)
 
 | # | Question | Answer |
 |---|----------|--------|
-| 29 | You reconcile monthly, not weekly? | |
-| 30 | You have >50 transactions per month? | |
-| 31 | You've had at least one reconciliation error this year? | |
-| 32 | You use CBE as your primary bank? | |
-| 33 | You've heard of NYLOS ERP? | |
-| 34 | You'd pay ETB 5,000/month for this tool? | |
+| 25 | You reconcile monthly, not weekly? | |
+| 26 | You have >50 transactions per month? | |
+| 27 | You've had at least one reconciliation error this year? | |
+| 28 | You use CBE as your primary bank? | |
+| 29 | You've heard of NYLOS ERP? | |
 
 ---
 
@@ -158,11 +141,10 @@ Follow-up needed:
 1. **Start with Section 1** (5 min) — warm up, understand their world
 2. **Spend most time on Section 2** (15 min) — this is our differentiator
 3. **Quick pass on Sections 3-4** (10 min) — validate assumptions
-5. **Section 5** (5 min) — know what ERP to integrate
-6. **End with Section 6** (5 min) — gauge willingness to pay
-7. **Rapid fire Section 7** (2 min) — quick stats
+4. **Section 5** (5 min) — know what ERP to integrate
+5. **End with Section 6** (2 min) — rapid fire quick stats
 
-**Total: ~40 minutes**
+**Total: ~37 minutes**
 
 **Recording:** Ask permission to record. If no, take detailed notes.
 **Demo:** Have a working demo ready to show if they're interested.

@@ -12,6 +12,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.periods import router as periods_router
 from app.api.gl_mappings import router as gl_mappings_router
 from app.api.cash import router as cash_router
+from app.api.fees import router as fees_router
 
 # Configure logging
 logging.basicConfig(
@@ -47,6 +48,7 @@ app.include_router(dashboard_router)
 app.include_router(periods_router)
 app.include_router(gl_mappings_router)
 app.include_router(cash_router)
+app.include_router(fees_router)
 
 
 @app.on_event("startup")

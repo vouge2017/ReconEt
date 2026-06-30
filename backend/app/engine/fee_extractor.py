@@ -16,6 +16,7 @@ from enum import Enum
 class FeeType(str, Enum):
     BANK_CHARGE = "bank_charge"
     GOV_TAX = "gov_tax"
+    WHT = "wht"
     STAMP_DUTY = "stamp_duty"
     TRANSFER_FEE = "transfer_fee"
     CHEQUE_FEE = "cheque_fee"
@@ -36,6 +37,7 @@ class FeeExtractionResult:
     gross_amount: float
     bank_charge: float
     gov_tax: float
+    wht: float
     total_fees: float
     net_amount: float
     fee_breakdown: List[ExtractedFee]
@@ -51,6 +53,9 @@ class FeeExtractor:
         # Combined pattern first (most specific — catches FEE 25 TAX 15)
         (r'(?:FEE|CHG|CHARGE)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:TAX|VAT)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
          None, 0.95),
+        # WHT pattern (2% withholding tax on bank fees)
+        (r'(?:WHT|WITHHOLDING\s*TAX)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
+         FeeType.WHT, 0.9),
         # Specific patterns (match only if combined didn't)
         # SERVICE CHARGE, BANK FEE, TRANSFER FEE — these are specific enough
         (r'(?:SERVICE\s*CHARGE|BANK\s*FEE|TRANSFER\s*FEE)\s*[:=]?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
@@ -143,7 +148,8 @@ class FeeExtractor:
         bank_charge = sum(f.amount for f in fees_found if f.fee_type in 
                          [FeeType.BANK_CHARGE, FeeType.TRANSFER_FEE, FeeType.CHEQUE_FEE])
         gov_tax = sum(f.amount for f in fees_found if f.fee_type == FeeType.GOV_TAX)
-        total_fees = bank_charge + gov_tax
+        wht = sum(f.amount for f in fees_found if f.fee_type == FeeType.WHT)
+        total_fees = bank_charge + gov_tax + wht
         
         avg_confidence = sum(f.confidence for f in fees_found) / len(fees_found)
         
@@ -151,6 +157,7 @@ class FeeExtractor:
             gross_amount=amount,
             bank_charge=bank_charge,
             gov_tax=gov_tax,
+            wht=wht,
             total_fees=total_fees,
             net_amount=amount,
             fee_breakdown=fees_found,
@@ -191,6 +198,7 @@ class FeeExtractor:
                         gross_amount=amount,
                         bank_charge=estimate["fee"],
                         gov_tax=estimate["tax"],
+                        wht=0.0,
                         total_fees=estimate["total"],
                         net_amount=amount,
                         fee_breakdown=fees_found,
@@ -215,27 +223,7 @@ class FeeExtractor:
             gross_amount=amount,
             bank_charge=0.0,
             gov_tax=0.0,
-            total_fees=0.0,
-            net_amount=amount,
-            fee_breakdown=[],
-            extraction_method="none",
-            confidence=0.0,
-            needs_review=False
-        )
-    
-    def _parse_amount(self, text: str) -> float:
-        if not text:
-            return 0.0
-        try:
-            return float(text.replace(",", "").strip())
-        except (ValueError, TypeError):
-            return 0.0
-    
-    def _no_fee_result(self, amount: float) -> FeeExtractionResult:
-        return FeeExtractionResult(
-            gross_amount=amount,
-            bank_charge=0.0,
-            gov_tax=0.0,
+            wht=0.0,
             total_fees=0.0,
             net_amount=amount,
             fee_breakdown=[],
@@ -250,6 +238,7 @@ def format_fee_summary(results: List[FeeExtractionResult]) -> dict:
     total_gross = sum(r.gross_amount for r in results)
     total_bank_charges = sum(r.bank_charge for r in results)
     total_gov_tax = sum(r.gov_tax for r in results)
+    total_wht = sum(r.wht for r in results)
     total_fees = sum(r.total_fees for r in results)
     needs_review = sum(1 for r in results if r.needs_review)
 
@@ -267,6 +256,7 @@ def format_fee_summary(results: List[FeeExtractionResult]) -> dict:
         "total_gross_amount": total_gross,
         "total_bank_charges": total_bank_charges,
         "total_gov_tax": total_gov_tax,
+        "total_wht": total_wht,
         "total_fees": total_fees,
         "fee_percentage": (total_fees / total_gross * 100) if total_gross > 0 else 0,
         "needs_review": needs_review,

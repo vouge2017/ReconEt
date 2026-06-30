@@ -7,6 +7,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import reconciliation, cheques
+from app.api.auth import router as auth_router
+from app.api.dashboard import router as dashboard_router
+from app.api.periods import router as periods_router
+from app.api.gl_mappings import router as gl_mappings_router
 
 # Configure logging
 logging.basicConfig(
@@ -35,8 +39,12 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(auth_router)
 app.include_router(reconciliation.router)
 app.include_router(cheques.router)
+app.include_router(dashboard_router)
+app.include_router(periods_router)
+app.include_router(gl_mappings_router)
 
 
 @app.on_event("startup")

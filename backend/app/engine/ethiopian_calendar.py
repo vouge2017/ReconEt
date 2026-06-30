@@ -254,16 +254,18 @@ def parse_cbe_date(date_str: str, assume_ethiopian: bool = False) -> Optional[da
                 if year < 100:
                     year += 2000
                 
-                if assume_ethiopian or (year < 2024 and 1 <= month <= 13):
-                    try:
-                        return ethiopian_to_gregorian(year, month, day)
-                    except ValueError:
-                        pass
-                
+                # Try Gregorian first (most common for CBE statements)
                 try:
                     return date(year, month, day)
                 except ValueError:
                     pass
+                
+                # If Gregorian fails and assume_ethiopian, try Ethiopian conversion
+                if assume_ethiopian and 1 <= month <= 13:
+                    try:
+                        return ethiopian_to_gregorian(year, month, day)
+                    except ValueError:
+                        pass
                     
             except (ValueError, IndexError):
                 continue

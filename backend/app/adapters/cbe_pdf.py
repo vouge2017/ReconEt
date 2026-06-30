@@ -27,7 +27,7 @@ from enum import Enum
 
 from app.engine.pdf_extractor import PDFExtractor, PDFExtractionResult, ExtractedPage, ExtractedTable, ExtractionMethod, PDFType
 from app.engine.cmap_extractor import CMapPDFExtractor, CMapExtractionResult
-from app.engine.balance_verifier import BalanceVerifier, Transaction, VerificationResult
+from app.engine.balance_verifier import BalanceVerifier, Transaction, VerificationResult, VerificationStatus
 from app.engine.ethiopian_calendar import (
     parse_cbe_date, classify_reference_code, extract_cheque_number,
     BANK_REFERENCE_CODES
@@ -251,7 +251,7 @@ class CBEPDFAdapter:
                 closing_balance=None,
                 transactions=[],
                 verification=VerificationResult(
-                    status="failed", opening_balance=0, closing_balance=0,
+                    status=VerificationStatus.FAILED, opening_balance=0, closing_balance=0,
                     calculated_closing=0, total_credits=0, total_debits=0,
                     transaction_count=0, difference=0,
                     message="Failed to extract content from PDF.",
@@ -289,7 +289,7 @@ class CBEPDFAdapter:
                 closing_balance=closing_balance,
                 transactions=[],
                 verification=VerificationResult(
-                    status="failed", opening_balance=0, closing_balance=0,
+                    status=VerificationStatus.FAILED, opening_balance=0, closing_balance=0,
                     calculated_closing=0, total_credits=0, total_debits=0,
                     transaction_count=0, difference=0,
                     message="No transactions found in PDF."
@@ -583,99 +583,156 @@ class CBEPDFAdapter:
         self, text: str, account_type: CBEAccountType
     ) -> List[CBETransaction]:
         """
-        Fallback: Parse transactions from raw text when table extraction fails.
+        Parse transactions from CMap-extracted text.
         
-        Looks for patterns like:
-        15/06/2026  TRANSFER TO ABC  FT-2026-001  100,040.00
+        CBE CMap text format (multi-line blocks):
+            4,125.54          <- balance after txn
+            .00               <- credit (0 if none)
+            -1,002.00         <- debit (negative)
+            01 01 2022        <- transaction date
+            FT22001773M3      <- reference
+            ATM Cash Withdrawal <- narrative
+            01 01 2022        <- value date
         """
         transactions = []
         
-        # Pattern: date at start of line, followed by text, then amounts
-        # This is a rough heuristic for when table extraction fails
-        date_pattern = r'(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})'
-        amount_pattern = r'([\d,]+\.?\d*)'
+        # Date pattern: DD MM YYYY or DD/MM/YYYY or DD-MM-YYYY
+        date_re = re.compile(r'^(\d{1,2})[/\-\.\s](\d{1,2})[/\-\.\s](\d{4})$')
+        # Amount pattern: number with optional commas, decimal, negative
+        amount_re = re.compile(r'^[\-]?[\d,]+\.\d{2}$')
+        # Just .00
+        zero_re = re.compile(r'^\.00$')
+        # Reference pattern: starts with FT, CHQ, CD, CPO, ECS, PKR, VPCH, TT
+        ref_re = re.compile(r'^(FT|CHQ|CD|CPO|ECS|PKR|VPCH|TT)', re.IGNORECASE)
+        # Balance B/F, Opening Balance, Closing Balance markers
+        marker_re = re.compile(r'(Balance B/F|Opening Balance|Closing Balance|Statement)', re.IGNORECASE)
+        # Account info lines
+        info_re = re.compile(r'(Account|Currency|Account Type|From \d|NAEL|AHIMED|SARA|YOSEPH)', re.IGNORECASE)
         
-        lines = text.split('\n')
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
         
-        for line in lines:
-            line = line.strip()
-            if not line:
+        # Find transaction blocks by looking for date lines
+        # Then extract the 3 lines before (balance, credit, debit) and 2-3 lines after (ref, narrative, value_date)
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Check if this line is a date
+            if not date_re.match(line):
+                i += 1
                 continue
             
-            # Look for lines starting with a date
-            date_match = re.match(date_pattern, line)
-            if not date_match:
-                continue
-            
-            date_str = date_match.group(1)
-            txn_date = parse_cbe_date(date_str)
+            txn_date = parse_cbe_date(line)
             if not txn_date:
+                i += 1
                 continue
             
-            # Extract amounts from the line
-            amounts = re.findall(amount_pattern, line)
-            if len(amounts) < 2:  # Need at least date + one amount
+            # Skip dates that are clearly not transaction dates
+            # (e.g., dates in header/footer, dates before 2020 or after 2030)
+            if txn_date.year < 2020 or txn_date.year > 2030:
+                i += 1
                 continue
             
-            # Try to identify debit, credit, balance
-            # This is heuristic — amounts after the date
-            amount_values = []
-            for amt_str in amounts[1:]:  # Skip the date
-                try:
-                    amount_values.append(float(amt_str.replace(",", "")))
-                except ValueError:
-                    continue
+            # Found a transaction date. Extract block.
+            # Lines before date: [i-3]=balance, [i-2]=credit, [i-1]=debit
+            # Lines after date: [i+1]=reference, [i+2]=narrative, [i+3]=value_date
             
-            if not amount_values:
-                continue
-            
-            # Extract narrative (text between date and first amount)
-            narrative_start = line.find(date_str) + len(date_str)
-            first_amount_pos = len(line)
-            for amt in amounts[1:]:
-                pos = line.find(amt, narrative_start)
-                if pos != -1:
-                    first_amount_pos = min(first_amount_pos, pos)
-                    break
-            
-            narrative = line[narrative_start:first_amount_pos].strip()
-            
-            # Guess debit/credit/balance from position
+            # Extract amounts from lines before date
             debit = 0.0
             credit = 0.0
             balance = None
             
-            if len(amount_values) >= 3:
-                # debit, credit, balance
-                debit = amount_values[0]
-                credit = amount_values[1]
-                balance = amount_values[2]
-            elif len(amount_values) == 2:
-                # Could be amount + balance
-                if account_type == CBEAccountType.SAVINGS:
-                    # Savings: Credit, Debit, Balance
-                    credit = amount_values[0]
-                    balance = amount_values[1]
-                else:
-                    debit = amount_values[0]
-                    balance = amount_values[1]
-            elif len(amount_values) == 1:
-                debit = amount_values[0]
+            # Check 3 lines before the date for amounts
+            for j in range(max(0, i - 3), i):
+                amt_line = lines[j]
+                
+                if zero_re.match(amt_line):
+                    continue
+                
+                if amount_re.match(amt_line):
+                    val = float(amt_line.replace(",", ""))
+                    
+                    # Skip if it looks like a balance B/F or opening balance
+                    if j > 0 and marker_re.match(lines[j - 1] if j > 0 else ""):
+                        balance = val
+                        continue
+                    
+                    # Negative = debit, positive = credit
+                    if val < 0:
+                        debit = abs(val)
+                    elif val > 0:
+                        if credit > 0:
+                            # Second positive = balance
+                            balance = val
+                        else:
+                            credit = val
             
-            ref_code, ref_desc = classify_reference_code(narrative, bank="cbe")
+            # Extract reference and narrative from lines after date
+            reference = ""
+            narrative = ""
+            value_date = None
+            
+            # Look at lines after the date
+            for j in range(i + 1, min(i + 5, len(lines))):
+                next_line = lines[j]
+                
+                # Skip empty lines
+                if not next_line:
+                    continue
+                
+                # Check if it's a date (value date)
+                if date_re.match(next_line):
+                    value_date = parse_cbe_date(next_line)
+                    break  # Value date is the last part of the block
+                
+                # Check if it's a reference
+                if ref_re.match(next_line) and not reference:
+                    reference = next_line
+                    continue
+                
+                # Check if it's an amount (shouldn't be, but handle it)
+                if amount_re.match(next_line) or zero_re.match(next_line):
+                    break  # Next transaction block starting
+                
+                # Skip info lines
+                if info_re.match(next_line):
+                    continue
+                
+                # Otherwise it's narrative
+                if not narrative:
+                    narrative = next_line
+                else:
+                    # Multi-line narrative — append
+                    narrative += " " + next_line
+            
+            # Skip if no amounts found (header/footer dates)
+            if debit == 0 and credit == 0:
+                i += 1
+                continue
+            
+            # Clean up narrative
+            narrative = narrative.strip()
+            if len(narrative) > 100:
+                narrative = narrative[:100]
+            
+            # Classify reference
+            ref_code, ref_desc = classify_reference_code(reference or narrative, bank="cbe")
             
             transactions.append(CBETransaction(
                 date=txn_date,
-                value_date=None,
+                value_date=value_date,
                 narrative=narrative,
-                particulars="",
-                reference="",
+                particulars=reference,
+                reference=reference,
                 debit=debit,
                 credit=credit,
                 balance=balance,
                 transaction_type=ref_desc,
                 reference_code=ref_code,
             ))
+            
+            i += 1
         
         return transactions
     

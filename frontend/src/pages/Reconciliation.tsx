@@ -101,7 +101,7 @@ const getStatusBadge = (status: string) => {
 };
 
 // Fee Breakdown Card
-const FeeBreakdownCard: React.FC<{ fee: FeeBreakdown; confidence: number }> = ({ fee, confidence }) => {
+const FeeBreakdownCard: React.FC<{ fee: FeeBreakdown; confidence: number }> = ({ fee, confidence: _confidence }) => {
   if (!fee || fee.total_fees === 0) return null;
 
   return (
@@ -306,6 +306,7 @@ const ReconciliationPage: React.FC = () => {
   const [result, setResult] = useState<ReconciliationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [_balanceVerification, setBalanceVerification] = useState<any>(null);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
